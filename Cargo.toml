@@ -1,0 +1,17 @@
+[package]
+name = "chiplets-vmm-tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "vhost-blk"
+path = "src/bin/vhost-blk.rs"
+
+[dependencies]
+libc = "0.2"
+vhost = { version = "0.16", features = ["vhost-user-backend"] }
+vhost-user-backend = "0.22"
+virtio-bindings = "0.2"
+virtio-queue = "0.17"
+vm-memory = { version = "0.17.1", features = ["backend-atomic", "backend-mmap"] }
+vmm-sys-util = "0.15"

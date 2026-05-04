@@ -3,6 +3,8 @@ new file mode 100644
 index 0000000000..19ec79176a
 --- /dev/null
 +++ b/configs/devices/x86_64-softmmu/microvm-minimal.mak
-@@ -0,0 +1,2 @@
+@@ -0,0 +1,4 @@
 +# Minimal x86_64 system device set: microvm machine only.
 +CONFIG_MICROVM=y
++CONFIG_VIRTIO_PCI=y
++CONFIG_VHOST_USER_BLK=y

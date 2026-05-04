@@ -2,3 +2,5 @@ build
 .cache
 out
 result
+target
+run

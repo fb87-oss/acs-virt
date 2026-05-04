@@ -67,6 +67,7 @@ cd "$BUILD_DIR"
   --disable-werror \
   --enable-kvm \
   --enable-tcg \
+  --enable-vhost-user \
   --enable-strip \
   --enable-trace-backends=nop \
   --audio-drv-list= \
