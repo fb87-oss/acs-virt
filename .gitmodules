@@ -1,0 +1,4 @@
+[submodule "deps/qemu"]
+	path = deps/qemu
+	url = https://github.com/qemu/qemu
+	branch = origin/staging-10.2
