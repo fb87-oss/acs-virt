@@ -7,11 +7,26 @@ edition = "2021"
 name = "vhost-blk"
 path = "src/bin/vhost-blk.rs"
 
+[[bin]]
+name = "qemu-launch"
+path = "src/bin/qemu-launch.rs"
+
+[[bin]]
+name = "virtio-mmio-backend"
+path = "src/bin/virtio-mmio-backend.rs"
+
 [dependencies]
 libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 vhost = { version = "0.16", features = ["vhost-user-backend"] }
 vhost-user-backend = "0.22"
 virtio-bindings = "0.2"
 virtio-queue = "0.17"
 vm-memory = { version = "0.17.1", features = ["backend-atomic", "backend-mmap"] }
 vmm-sys-util = "0.15"
+
+[features]
+default = ["shared-mem", "qemu-mediated"]
+shared-mem = []
+qemu-mediated = []

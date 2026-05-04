@@ -1,0 +1,23 @@
+[machine]
+type = "microvm"
+memory = "512M"
+kvm = true
+pcie = false
+
+[qemu]
+binary = "out/qemu-x64-minimal/bin/qemu-system-x86_64"
+bios_dir = "deps/qemu/pc-bios"
+
+[transport]
+ram_access = "shared-mem"
+
+[[mmio_windows]]
+name = "blk0"
+base = "0xfeb00000"
+size = "0x200"
+# QEMU raises IO-APIC GSI 4; Linux exposes that line as IRQ 49 on microvm.
+irq = 4
+guest_irq = 49
+socket = "run/soc1-mmio.sock"
+target = "blk0"
+enabled = true

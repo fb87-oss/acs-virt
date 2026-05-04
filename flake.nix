@@ -29,6 +29,15 @@
       insmod /${moduleDir}/drivers/virtio/virtio_pci_modern_dev.ko 2>/dev/null || true
       insmod /${moduleDir}/drivers/virtio/virtio_pci_legacy_dev.ko 2>/dev/null || true
       insmod /${moduleDir}/drivers/virtio/virtio_pci.ko 2>/dev/null || true
+      virtio_mmio_params=""
+      for arg in $(cat /proc/cmdline); do
+        case "$arg" in
+          virtio_mmio.device=*)
+            virtio_mmio_params="$virtio_mmio_params device=''${arg#virtio_mmio.device=}"
+            ;;
+        esac
+      done
+      insmod /${moduleDir}/drivers/virtio/virtio_mmio.ko $virtio_mmio_params 2>/dev/null || true
       insmod /${moduleDir}/drivers/block/virtio_blk.ko 2>/dev/null || true
       mdev -s
     '';
@@ -55,6 +64,7 @@
       copy_module ${moduleDir}/drivers/virtio/virtio_pci_modern_dev.ko
       copy_module ${moduleDir}/drivers/virtio/virtio_pci_legacy_dev.ko
       copy_module ${moduleDir}/drivers/virtio/virtio_pci.ko
+      copy_module ${moduleDir}/drivers/virtio/virtio_mmio.ko
       copy_module ${moduleDir}/drivers/block/virtio_blk.ko
 
       (cd initrd; find . -print0 | \
@@ -63,31 +73,19 @@
     '';
 
     runvm = pkgs.writeShellScriptBin "runvm" ''
-      qemu_bin="''${QEMU_BIN:-$PWD/out/qemu-x64-minimal/bin/qemu-system-x86_64}"
-
-      if [ ! -x "$qemu_bin" ]; then
-        echo "QEMU binary not found: $qemu_bin" >&2
-        echo "Run scripts/build-qemu-x64.sh from the workspace root, or set QEMU_BIN." >&2
-        exit 1
+      if [ "$#" -lt 1 ]; then
+        echo "usage: runvm <configs/qemu-vms/*.toml> [-- <qemu-args>...]" >&2
+        exit 2
       fi
 
-      blk_args=()
-      if [ -n "''${VHOST_BLK_SOCKET:-}" ]; then
-        blk_args+=(
-          -chardev "socket,id=vhostblk,path=$VHOST_BLK_SOCKET"
-          -device "vhost-user-blk-pci,chardev=vhostblk,id=vhostblk0"
-        )
-      fi
-
-      "$qemu_bin" -L "$PWD/deps/qemu/pc-bios" \
-        -object memory-backend-memfd,id=guestmem,size=512M,share=on \
-        -machine microvm,pcie=on,memory-backend=guestmem \
-        -enable-kvm -m 512M -nographic \
-        -kernel ${kernel}/bzImage \
-        -initrd ${initrd} \
-        -append "console=ttyS0 root=/dev/ram0 rdinit=/linuxrc loglevel=8" \
-        "''${blk_args[@]}" \
-        $@
+      exec nix shell \
+        nixpkgs#cargo \
+        nixpkgs#gcc \
+        nixpkgs#rustc \
+        --command cargo run --quiet --manifest-path "$PWD/Cargo.toml" --bin qemu-launch -- \
+          --kernel ${kernel}/bzImage \
+          --initrd ${initrd} \
+          "$@"
     '';
   in
   {

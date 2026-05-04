@@ -1,0 +1,456 @@
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index 80c8a6a58d..f83ef340cc 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -1,3 +1,6 @@
++config AXI_MMIO_PROXY
++    bool
++
+ config APPLESMC
+     bool
+     depends on ISA_BUS
+diff --git a/hw/misc/axi-mmio-proxy.c b/hw/misc/axi-mmio-proxy.c
+new file mode 100644
+index 0000000000..14521bdf7f
+--- /dev/null
++++ b/hw/misc/axi-mmio-proxy.c
+@@ -0,0 +1,430 @@
++/*
++ * AXI/MMIO proxy device.
++ *
++ * This device intentionally does not implement virtio or any other endpoint
++ * protocol. It exposes a configurable MMIO window and is the QEMU-side anchor
++ * for forwarding register accesses to an external device model.
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "system/address-spaces.h"
++#include "system/memory.h"
++#include "hw/i386/x86.h"
++#include "hw/irq.h"
++#include "hw/qdev-properties.h"
++#include "hw/sysbus.h"
++#include "qemu/error-report.h"
++#include "qemu/log.h"
++#include "qemu/module.h"
++#include "qom/object.h"
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <unistd.h>
++
++#define TYPE_AXI_MMIO_PROXY "axi-mmio-proxy"
++OBJECT_DECLARE_SIMPLE_TYPE(AxiMmioProxyState, AXI_MMIO_PROXY)
++
++typedef enum AxiMmioRamAccess {
++    AXI_MMIO_RAM_ACCESS_SHARED_MEM,
++    AXI_MMIO_RAM_ACCESS_QEMU_MEDIATED,
++} AxiMmioRamAccess;
++
++typedef enum AxiMmioMsgKind {
++    AXI_MMIO_MSG_HELLO = 1,
++    AXI_MMIO_MSG_MEM_REGION = 2,
++    AXI_MMIO_MSG_MMIO_READ = 3,
++    AXI_MMIO_MSG_MMIO_READ_REPLY = 4,
++    AXI_MMIO_MSG_MMIO_WRITE = 5,
++    AXI_MMIO_MSG_IRQ_ASSERT = 6,
++    AXI_MMIO_MSG_IRQ_DEASSERT = 7,
++    AXI_MMIO_MSG_DMA_READ = 8,
++    AXI_MMIO_MSG_DMA_READ_REPLY = 9,
++    AXI_MMIO_MSG_DMA_WRITE = 10,
++    AXI_MMIO_MSG_ERROR = 0xffff,
++} AxiMmioMsgKind;
++
++typedef struct AxiMmioMsgHeader {
++    uint16_t kind;
++    uint16_t flags;
++    uint32_t window_id;
++    uint64_t offset;
++    uint32_t length;
++} AxiMmioMsgHeader;
++
++struct AxiMmioProxyState {
++    SysBusDevice parent_obj;
++
++    MemoryRegion mmio;
++    uint64_t base;
++    uint64_t size;
++    uint32_t irq_num;
++    char *socket_path;
++    char *ram_access;
++    char *target;
++    AxiMmioRamAccess ram_access_mode;
++    int sockfd;
++    bool socket_error_reported;
++    qemu_irq irq;
++};
++
++static bool axi_mmio_proxy_io_all(int fd, void *buf, size_t len, bool is_write)
++{
++    uint8_t *pos = buf;
++
++    while (len) {
++        ssize_t ret;
++
++        if (is_write) {
++            ret = write(fd, pos, len);
++        } else {
++            ret = read(fd, pos, len);
++        }
++
++        if (ret < 0) {
++            if (errno == EINTR) {
++                continue;
++            }
++            return false;
++        }
++
++        if (ret == 0) {
++            return false;
++        }
++
++        pos += ret;
++        len -= ret;
++    }
++
++    return true;
++}
++
++static void axi_mmio_proxy_close(AxiMmioProxyState *s)
++{
++    if (s->sockfd >= 0) {
++        close(s->sockfd);
++        s->sockfd = -1;
++    }
++}
++
++static bool axi_mmio_proxy_connect(AxiMmioProxyState *s)
++{
++    struct sockaddr_un addr;
++    int fd;
++
++    if (s->sockfd >= 0) {
++        return true;
++    }
++
++    fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (fd < 0) {
++        goto fail;
++    }
++
++    memset(&addr, 0, sizeof(addr));
++    addr.sun_family = AF_UNIX;
++    if (g_strlcpy(addr.sun_path, s->socket_path, sizeof(addr.sun_path)) >=
++        sizeof(addr.sun_path)) {
++        errno = ENAMETOOLONG;
++        goto fail_close;
++    }
++
++    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
++        goto fail_close;
++    }
++
++    s->sockfd = fd;
++    s->socket_error_reported = false;
++    return true;
++
++fail_close:
++    close(fd);
++fail:
++    if (!s->socket_error_reported) {
++        warn_report("%s: cannot connect to %s: %s",
++                    TYPE_AXI_MMIO_PROXY,
++                    s->socket_path,
++                    g_strerror(errno));
++        s->socket_error_reported = true;
++    }
++    return false;
++}
++
++static bool axi_mmio_proxy_send_header(AxiMmioProxyState *s,
++                                       AxiMmioMsgKind kind,
++                                       hwaddr addr,
++                                       uint32_t len)
++{
++    AxiMmioMsgHeader hdr = {
++        .kind = kind,
++        .flags = 0,
++        .window_id = 0,
++        .offset = addr,
++        .length = len,
++    };
++
++    if (!axi_mmio_proxy_connect(s)) {
++        return false;
++    }
++
++    if (!axi_mmio_proxy_io_all(s->sockfd, &hdr, sizeof(hdr), true)) {
++        axi_mmio_proxy_close(s);
++        return false;
++    }
++
++    return true;
++}
++
++static bool axi_mmio_proxy_send_reply(AxiMmioProxyState *s,
++                                      AxiMmioMsgKind kind,
++                                      hwaddr addr,
++                                      uint32_t len)
++{
++    AxiMmioMsgHeader hdr = {
++        .kind = kind,
++        .flags = 0,
++        .window_id = 0,
++        .offset = addr,
++        .length = len,
++    };
++
++    return axi_mmio_proxy_io_all(s->sockfd, &hdr, sizeof(hdr), true);
++}
++
++static void axi_mmio_proxy_pulse_irq(AxiMmioProxyState *s)
++{
++    if (!s->irq) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: backend requested IRQ %u but it is not wired\n",
++                      TYPE_AXI_MMIO_PROXY, s->irq_num);
++        return;
++    }
++
++    qemu_set_irq(s->irq, 1);
++    qemu_set_irq(s->irq, 0);
++}
++
++static bool axi_mmio_proxy_service_backend(AxiMmioProxyState *s)
++{
++    AxiMmioMsgHeader hdr;
++    g_autofree uint8_t *buf = NULL;
++    MemTxResult result;
++
++    for (;;) {
++        if (!axi_mmio_proxy_io_all(s->sockfd, &hdr, sizeof(hdr), false)) {
++            axi_mmio_proxy_close(s);
++            return false;
++        }
++
++        switch (hdr.kind) {
++        case AXI_MMIO_MSG_ERROR:
++            return true;
++        case AXI_MMIO_MSG_IRQ_ASSERT:
++            axi_mmio_proxy_pulse_irq(s);
++            break;
++        case AXI_MMIO_MSG_IRQ_DEASSERT:
++            if (s->irq) {
++                qemu_set_irq(s->irq, 0);
++            }
++            break;
++        case AXI_MMIO_MSG_DMA_READ:
++            if (!hdr.length) {
++                if (!axi_mmio_proxy_send_reply(s, AXI_MMIO_MSG_DMA_READ_REPLY,
++                                               hdr.offset, 0)) {
++                    axi_mmio_proxy_close(s);
++                    return false;
++                }
++                break;
++            }
++            buf = g_malloc0(hdr.length);
++            result = address_space_rw(&address_space_memory, hdr.offset,
++                                      MEMTXATTRS_UNSPECIFIED, buf, hdr.length,
++                                      false);
++            if (result != MEMTX_OK ||
++                !axi_mmio_proxy_send_reply(s, AXI_MMIO_MSG_DMA_READ_REPLY,
++                                           hdr.offset, hdr.length) ||
++                !axi_mmio_proxy_io_all(s->sockfd, buf, hdr.length, true)) {
++                axi_mmio_proxy_close(s);
++                return false;
++            }
++            g_clear_pointer(&buf, g_free);
++            break;
++        case AXI_MMIO_MSG_DMA_WRITE:
++            buf = g_malloc0(hdr.length);
++            if ((hdr.length &&
++                 !axi_mmio_proxy_io_all(s->sockfd, buf, hdr.length, false)) ||
++                address_space_rw(&address_space_memory, hdr.offset,
++                                 MEMTXATTRS_UNSPECIFIED, buf, hdr.length,
++                                 true) != MEMTX_OK ||
++                !axi_mmio_proxy_send_reply(s, AXI_MMIO_MSG_ERROR, 0, 0)) {
++                axi_mmio_proxy_close(s);
++                return false;
++            }
++            g_clear_pointer(&buf, g_free);
++            break;
++        default:
++            qemu_log_mask(LOG_GUEST_ERROR,
++                          "%s: unsupported backend message kind=%u\n",
++                          TYPE_AXI_MMIO_PROXY, hdr.kind);
++            axi_mmio_proxy_close(s);
++            return false;
++        }
++    }
++}
++
++static uint64_t axi_mmio_proxy_read(void *opaque, hwaddr addr, unsigned size)
++{
++    AxiMmioProxyState *s = opaque;
++    AxiMmioMsgHeader reply;
++    uint64_t value = 0;
++
++    if (!axi_mmio_proxy_send_header(s, AXI_MMIO_MSG_MMIO_READ, addr, size)) {
++        return 0;
++    }
++
++    if (!axi_mmio_proxy_io_all(s->sockfd, &reply, sizeof(reply), false)) {
++        axi_mmio_proxy_close(s);
++        return 0;
++    }
++
++    if (reply.kind != AXI_MMIO_MSG_MMIO_READ_REPLY || reply.length > 8) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: invalid read reply kind=%u length=%u\n",
++                      TYPE_AXI_MMIO_PROXY,
++                      reply.kind,
++                      reply.length);
++        axi_mmio_proxy_close(s);
++        return 0;
++    }
++
++    if (reply.length &&
++        !axi_mmio_proxy_io_all(s->sockfd, &value, reply.length, false)) {
++        axi_mmio_proxy_close(s);
++        return 0;
++    }
++
++    return value;
++}
++
++static void axi_mmio_proxy_write(void *opaque, hwaddr addr, uint64_t value,
++                                 unsigned size)
++{
++    AxiMmioProxyState *s = opaque;
++
++    if (!axi_mmio_proxy_send_header(s, AXI_MMIO_MSG_MMIO_WRITE, addr, size)) {
++        return;
++    }
++
++    if (!axi_mmio_proxy_io_all(s->sockfd, &value, size, true)) {
++        axi_mmio_proxy_close(s);
++        return;
++    }
++
++    axi_mmio_proxy_service_backend(s);
++}
++
++static const MemoryRegionOps axi_mmio_proxy_ops = {
++    .read = axi_mmio_proxy_read,
++    .write = axi_mmio_proxy_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid.min_access_size = 1,
++    .valid.max_access_size = 8,
++    .impl.min_access_size = 1,
++    .impl.max_access_size = 8,
++};
++
++static bool axi_mmio_proxy_parse_ram_access(AxiMmioProxyState *s,
++                                            Error **errp)
++{
++    const char *mode = s->ram_access ?: "shared-mem";
++
++    if (!g_strcmp0(mode, "shared-mem")) {
++        s->ram_access_mode = AXI_MMIO_RAM_ACCESS_SHARED_MEM;
++        return true;
++    }
++
++    if (!g_strcmp0(mode, "qemu-mediated")) {
++        s->ram_access_mode = AXI_MMIO_RAM_ACCESS_QEMU_MEDIATED;
++        return true;
++    }
++
++    error_setg(errp, "invalid ram-access '%s'", mode);
++    return false;
++}
++
++static void axi_mmio_proxy_realize(DeviceState *dev, Error **errp)
++{
++    AxiMmioProxyState *s = AXI_MMIO_PROXY(dev);
++    X86MachineState *x86ms = X86_MACHINE(qdev_get_machine());
++    s->sockfd = -1;
++
++    if (!s->base) {
++        error_setg(errp, "base property is required");
++        return;
++    }
++
++    if (!s->size) {
++        error_setg(errp, "size property is required");
++        return;
++    }
++
++    if (!s->socket_path || !s->socket_path[0]) {
++        error_setg(errp, "socket property is required");
++        return;
++    }
++
++    if (!axi_mmio_proxy_parse_ram_access(s, errp)) {
++        return;
++    }
++
++    memory_region_init_io(&s->mmio, OBJECT(dev), &axi_mmio_proxy_ops, s,
++                          TYPE_AXI_MMIO_PROXY, s->size);
++    memory_region_add_subregion(get_system_memory(), s->base, &s->mmio);
++    if (x86ms->gsi && s->irq_num < 256) {
++        s->irq = x86ms->gsi[s->irq_num];
++    }
++
++    warn_report("%s: mapped 0x%" PRIx64 " bytes at 0x%" PRIx64
++                ", irq=%u, socket=%s, ram-access=%s, target=%s; "
++                "external forwarding protocol enabled",
++                TYPE_AXI_MMIO_PROXY,
++                s->size,
++                s->base,
++                s->irq_num,
++                s->socket_path,
++                s->ram_access ?: "shared-mem",
++                s->target ?: "");
++}
++
++static const Property axi_mmio_proxy_properties[] = {
++    DEFINE_PROP_UINT64("base", AxiMmioProxyState, base, 0),
++    DEFINE_PROP_UINT64("size", AxiMmioProxyState, size, 0),
++    DEFINE_PROP_UINT32("irq", AxiMmioProxyState, irq_num, 0),
++    DEFINE_PROP_STRING("socket", AxiMmioProxyState, socket_path),
++    DEFINE_PROP_STRING("ram-access", AxiMmioProxyState, ram_access),
++    DEFINE_PROP_STRING("target", AxiMmioProxyState, target),
++};
++
++static void axi_mmio_proxy_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    dc->realize = axi_mmio_proxy_realize;
++    dc->user_creatable = true;
++    device_class_set_props(dc, axi_mmio_proxy_properties);
++    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
++}
++
++static const TypeInfo axi_mmio_proxy_info = {
++    .name = TYPE_AXI_MMIO_PROXY,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(AxiMmioProxyState),
++    .class_init = axi_mmio_proxy_class_init,
++};
++
++static void axi_mmio_proxy_register_types(void)
++{
++    type_register_static(&axi_mmio_proxy_info);
++}
++
++type_init(axi_mmio_proxy_register_types);
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 86596ef8bc..9f2bd7bb47 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -1,3 +1,4 @@
++system_ss.add(when: 'CONFIG_AXI_MMIO_PROXY', if_true: files('axi-mmio-proxy.c'))
+ system_ss.add(when: 'CONFIG_APPLESMC', if_true: files('applesmc.c'))
+ system_ss.add(when: 'CONFIG_EDU', if_true: files('edu.c'))
+ system_ss.add(when: 'CONFIG_FW_CFG_DMA', if_true: files('vmcoreinfo.c'))
