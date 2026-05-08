@@ -6,4 +6,4 @@ index 0000000000..80a5d87093
 @@ -0,0 +1,3 @@
 +# Minimal x86_64 system device set: microvm machine only.
 +CONFIG_MICROVM=y
-+CONFIG_AXI_BUS=y
++CONFIG_VIRT_AXI=y

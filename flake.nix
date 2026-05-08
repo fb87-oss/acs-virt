@@ -71,7 +71,7 @@
         exit 2
       fi
 
-      if [ ! -x "$PWD/out/blkd" ] || [ ! -x "$PWD/out/cond" ]; then
+      if [ ! -x "$PWD/out/virtio-blkd" ] || [ ! -x "$PWD/out/virtio-consoled" ]; then
         "$PWD/scripts/build-tools.sh"
       fi
 

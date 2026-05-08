@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(chiplets_axi_bus C)
+project(chiplets_virt_axi C)
 
 include(FetchContent)
 include(ExternalProject)
@@ -35,36 +35,47 @@ add_library(ctest_header INTERFACE)
 target_include_directories(ctest_header INTERFACE ${ctest_SOURCE_DIR})
 target_compile_options(ctest_header INTERFACE -Wno-attributes)
 
-add_executable(blkd
-  src/bin/blkd.c
-  src/bin/blkd-axi.c
-  src/bin/blkd-virtio.c
-  src/bin/blkd-block.c
+add_library(virtio STATIC
+  src/virtio.c
 )
-target_link_libraries(blkd PRIVATE project_warnings)
+target_include_directories(virtio PUBLIC src)
+target_link_libraries(virtio PRIVATE project_warnings)
 
-add_executable(cond
-  src/bin/cond.c
-  src/bin/cond-axi.c
-  src/bin/cond-virtio.c
-  src/bin/cond-console.c
+add_library(virt_axi STATIC
+  src/fabrics/virt-axi.c
 )
-target_link_libraries(cond PRIVATE project_warnings)
+target_include_directories(virt_axi PUBLIC src src/fabrics)
+target_link_libraries(virt_axi PRIVATE project_warnings)
+
+add_library(virtio_mmio STATIC
+  src/virtio-mmio.c
+)
+target_include_directories(virtio_mmio PUBLIC src)
+target_link_libraries(virtio_mmio PRIVATE project_warnings virtio)
+
+add_executable(virtio-blkd
+  src/drivers/virtio-blkd.c
+)
+target_link_libraries(virtio-blkd PRIVATE project_warnings)
+target_link_libraries(virtio-blkd PRIVATE virt_axi virtio_mmio virtio)
+
+add_executable(virtio-consoled
+  src/drivers/virtio-consoled.c
+)
+target_link_libraries(virtio-consoled PRIVATE project_warnings)
+target_link_libraries(virtio-consoled PRIVATE virt_axi virtio_mmio virtio)
 
 add_executable(c-backend-tests
   tests/c-backend-tests.c
-  src/bin/blkd-axi.c
-  src/bin/blkd-virtio.c
-  src/bin/blkd-block.c
-  src/bin/cond-axi.c
-  src/bin/cond-virtio.c
-  src/bin/cond-console.c
+  src/drivers/virtio-blkd.c
+  src/drivers/virtio-consoled.c
 )
-target_include_directories(c-backend-tests PRIVATE src/bin)
-target_link_libraries(c-backend-tests PRIVATE project_warnings ctest_header)
+target_include_directories(c-backend-tests PRIVATE src src/drivers src/fabrics)
+target_compile_definitions(c-backend-tests PRIVATE BACKEND_TEST)
+target_link_libraries(c-backend-tests PRIVATE project_warnings ctest_header virt_axi virtio_mmio virtio)
 add_test(NAME c-backend-tests COMMAND c-backend-tests)
 
-install(TARGETS blkd cond c-backend-tests RUNTIME DESTINATION bin)
+install(TARGETS virtio-blkd virtio-consoled c-backend-tests RUNTIME DESTINATION bin)
 
 if(CHIPLETS_FETCH_QEMU)
   include(${CHIPLETS_QEMU_TARGET_FILE})

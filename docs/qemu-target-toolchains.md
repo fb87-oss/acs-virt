@@ -76,7 +76,7 @@ Build it with:
 scripts/build-qemu-arm64.sh
 ```
 
-The `axi-bus` QEMU proxy supports x86 microvm ACPI discovery and AArch64 `virt`
+The `virt-axi` QEMU proxy supports x86 microvm ACPI discovery and AArch64 `virt`
 FDT discovery. The current launch sample remains x86 microvm-specific because it
 uses the x86 kernel/initrd and microvm machine parameters.
 

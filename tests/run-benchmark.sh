@@ -28,11 +28,11 @@ fi
 
 mkdir -p run
 truncate -s 64M run/blk0.img
-rm -f run/cond.out run/axi-bus-backend.log run/axi-console-backend.log run/axi-bus-bench-guest.log
+rm -f run/cond.out run/virt-axi-backend.log run/virt-axi-console-backend.log run/virt-axi-bench-guest.log
 
-backend_log=run/axi-bus-backend.log
-console_backend_log=run/axi-console-backend.log
-guest_log=run/axi-bus-bench-guest.log
+backend_log=run/virt-axi-backend.log
+console_backend_log=run/virt-axi-console-backend.log
+guest_log=run/virt-axi-bench-guest.log
 
 set +e
 (
@@ -46,7 +46,7 @@ set +e
   printf 'echo READ_BENCH_START\n'
   printf 'dd if=/dev/vda of=/dev/null bs=%s count=%s 2>&1\n' "$bs" "$count"
   printf 'echo READ_BENCH_END\n'
-) | timeout "$guest_timeout" nix run .#runvm-x64 -- samples/axi-bus-x64.toml \
+) | timeout "$guest_timeout" nix run .#runvm-x64 -- samples/virt-axi-x64.toml \
   > "$guest_log" 2>&1
 guest_status=$?
 set -e
@@ -81,7 +81,7 @@ if [ -z "$write_result" ] || [ -z "$read_result" ]; then
   exit 1
 fi
 
-echo "axi-bus dd benchmark complete"
+echo "virt-axi dd benchmark complete"
 echo "config: size=${bench_size_mb}MiB bs=$bs count=$count"
 echo "write:  $write_result"
 echo "read:   $read_result"

@@ -131,12 +131,12 @@ def build_backend_commands(workspace: Path, config: dict, qemu: dict) -> list[tu
             values["image"] = str(resolve(workspace, qemu_device["image"]))
             if "readonly" in qemu_device:
                 values["readonly"] = qemu_device["readonly"]
-            commands.append(([str(resolve(workspace, "out/blkd")), key_value_arg(values)], log))
+            commands.append(([str(resolve(workspace, "out/virtio-blkd")), key_value_arg(values)], log))
         elif device_type == "virtio-console":
             values = dict(common)
             if "output" in qemu_device:
                 values["output"] = str(resolve(workspace, qemu_device["output"]))
-            commands.append(([str(resolve(workspace, "out/cond")), key_value_arg(values)], log))
+            commands.append(([str(resolve(workspace, "out/virtio-consoled")), key_value_arg(values)], log))
         else:
             raise ValueError(f'unsupported device type for {name}: {device_type}')
     return commands
@@ -205,7 +205,7 @@ def build_qemu_args(workspace: Path, config: dict, kernel: str, initrd: str, ext
         args.extend(
             [
                 "-device",
-                "axi-bus,"
+                "virt-axi,"
                 f"id={window['name']},"
                 f"base={window['base']},"
                 f"size={window['size']},"

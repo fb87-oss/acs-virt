@@ -4,11 +4,17 @@
 
 #include "ctest.h"
 
-#include "blkd.h"
-#include "cond.h"
+#include "virtio-blkd.h"
+#include "virtio-consoled.h"
+#include "virtio-mmio.h"
 
 #include <fcntl.h>
+#include <linux/virtio_config.h>
+#include <linux/virtio_blk.h>
+#include <linux/virtio_ids.h>
+#include <linux/virtio_mmio.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -84,7 +90,7 @@ CTEST(blkd_block, reads_writes_and_rejects_out_of_bounds)
     uint8_t write_buf[4] = {0xde, 0xad, 0xbe, 0xef};
     uint8_t read_buf[4] = {0};
 
-    make_temp_path(path, sizeof(path), "blkd-block");
+    make_temp_path(path, sizeof(path), "virtio-blkd");
     fd = mkstemp(path);
     ASSERT_TRUE(fd >= 0);
     fill_file(fd, 1024);
@@ -115,7 +121,7 @@ CTEST(cond_console, writes_to_output_file)
     char buf[16] = {0};
     const char msg[] = "hello console";
 
-    make_temp_path(path, sizeof(path), "cond-console");
+    make_temp_path(path, sizeof(path), "virtio-consoled");
     fd = mkstemp(path);
     ASSERT_TRUE(fd >= 0);
     close(fd);
@@ -136,66 +142,145 @@ CTEST(blkd_virtio, status_zero_resets_runtime_state)
 {
     struct blkd_block_backend backend = {.fd = -1, .image_len = 64 * 1024 * 1024, .readonly = false};
     struct blkd_virtio_device dev;
+    struct virtio_mmio mmio;
 
     blkd_virtio_init(&dev, &backend);
-    blkd_virtio_mmio_write(&dev, 0x014, 1);
-    blkd_virtio_mmio_write(&dev, 0x024, 1);
-    blkd_virtio_mmio_write(&dev, 0x020, 1);
-    blkd_virtio_mmio_write(&dev, 0x030, 0);
-    blkd_virtio_mmio_write(&dev, 0x038, 128);
-    blkd_virtio_mmio_write(&dev, 0x044, 1);
-    blkd_virtio_mmio_write(&dev, 0x080, 0x1000);
-    blkd_virtio_mmio_write(&dev, 0x090, 0x2000);
-    blkd_virtio_mmio_write(&dev, 0x0a0, 0x3000);
-    blkd_virtio_mmio_write(&dev, 0x070, 0xf);
+    virtio_mmio_init(&mmio, &dev.vdev);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 1);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_DRIVER_FEATURES_SEL, 1);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_DRIVER_FEATURES, 1);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_SEL, 0);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_NUM, 128);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_READY, 1);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_DESC_LOW, 0x1000);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_AVAIL_LOW, 0x2000);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_USED_LOW, 0x3000);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_STATUS,
+                           VIRTIO_CONFIG_S_ACKNOWLEDGE |
+                           VIRTIO_CONFIG_S_DRIVER |
+                           VIRTIO_CONFIG_S_DRIVER_OK |
+                           VIRTIO_CONFIG_S_FEATURES_OK);
 
-    dev.interrupt_status = 1;
-    dev.last_avail_idx = 7;
-    blkd_virtio_mmio_write(&dev, 0x070, 0);
+    dev.vdev.interrupt_status = 1;
+    dev.queue.last_avail_idx = 7;
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_STATUS, 0);
 
-    ASSERT_EQUAL_U(0, dev.device_features_sel);
-    ASSERT_EQUAL_U(0, dev.driver_features_sel);
-    ASSERT_EQUAL_U(0, dev.driver_features[0]);
-    ASSERT_EQUAL_U(0, dev.driver_features[1]);
-    ASSERT_EQUAL_U(BLKD_QUEUE_SIZE, dev.queue_num);
-    ASSERT_EQUAL_U(0, dev.queue_ready);
-    ASSERT_EQUAL_U(0, dev.queue_desc);
-    ASSERT_EQUAL_U(0, dev.queue_driver);
-    ASSERT_EQUAL_U(0, dev.queue_device);
-    ASSERT_EQUAL_U(0, dev.last_avail_idx);
-    ASSERT_EQUAL_U(0, dev.status);
-    ASSERT_EQUAL_U(0, dev.interrupt_status);
+    ASSERT_EQUAL_U(0, mmio.device_features_sel);
+    ASSERT_EQUAL_U(0, mmio.driver_features_sel);
+    ASSERT_EQUAL_U(0, dev.vdev.driver_features);
+    ASSERT_EQUAL_U(BLKD_QUEUE_SIZE, dev.queue.num);
+    ASSERT_EQUAL_U(0, dev.queue.ready);
+    ASSERT_EQUAL_U(0, dev.queue.desc);
+    ASSERT_EQUAL_U(0, dev.queue.avail);
+    ASSERT_EQUAL_U(0, dev.queue.used);
+    ASSERT_EQUAL_U(0, dev.queue.last_avail_idx);
+    ASSERT_EQUAL_U(0, dev.vdev.status);
+    ASSERT_EQUAL_U(0, dev.vdev.interrupt_status);
+}
+
+CTEST(blkd_virtio, exposes_linux_virtio_mmio_probe_registers)
+{
+    struct blkd_block_backend backend = {.fd = -1, .image_len = 64 * 1024 * 1024, .readonly = false};
+    struct blkd_virtio_device dev;
+    struct virtio_mmio mmio;
+
+    blkd_virtio_init(&dev, &backend);
+    virtio_mmio_init(&mmio, &dev.vdev);
+
+    ASSERT_EQUAL_U(VIRTIO_MMIO_MAGIC_NUMBER, virtio_mmio_read(&mmio, VIRTIO_MMIO_MAGIC_VALUE, 4));
+    ASSERT_EQUAL_U(VIRTIO_MMIO_VERSION_2, virtio_mmio_read(&mmio, VIRTIO_MMIO_VERSION, 4));
+    ASSERT_EQUAL_U(VIRTIO_ID_BLOCK, virtio_mmio_read(&mmio, VIRTIO_MMIO_DEVICE_ID, 4));
+    ASSERT_EQUAL_U(VIRTIO_VENDOR_ID_LOCAL, virtio_mmio_read(&mmio, VIRTIO_MMIO_VENDOR_ID, 4));
+
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 0);
+    ASSERT_EQUAL_U((1u << VIRTIO_BLK_F_BLK_SIZE) | (1u << VIRTIO_BLK_F_FLUSH),
+                   virtio_mmio_read(&mmio, VIRTIO_MMIO_DEVICE_FEATURES, 4));
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 1);
+    ASSERT_EQUAL_U(1u << (VIRTIO_F_VERSION_1 - 32),
+                   virtio_mmio_read(&mmio, VIRTIO_MMIO_DEVICE_FEATURES, 4));
+
+    ASSERT_EQUAL_U((uint32_t)(backend.image_len / BLKD_SECTOR_SIZE),
+                   virtio_mmio_read(&mmio, VIRTIO_MMIO_CONFIG + offsetof(struct virtio_blk_config, capacity), 4));
+    ASSERT_EQUAL_U(BLKD_SECTOR_SIZE,
+                   virtio_mmio_read(&mmio, VIRTIO_MMIO_CONFIG + offsetof(struct virtio_blk_config, blk_size), 4));
+}
+
+CTEST(blkd_virtio, stores_linux_virtio_mmio_queue_setup)
+{
+    struct blkd_block_backend backend = {.fd = -1, .image_len = 64 * 1024 * 1024, .readonly = false};
+    struct blkd_virtio_device dev;
+    struct virtio_mmio mmio;
+
+    blkd_virtio_init(&dev, &backend);
+    virtio_mmio_init(&mmio, &dev.vdev);
+    ASSERT_EQUAL_U(BLKD_QUEUE_SIZE, virtio_mmio_read(&mmio, VIRTIO_MMIO_QUEUE_NUM_MAX, 4));
+
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_NUM, 128);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_READY, 1);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_DESC_LOW, 0x89abcdef);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_DESC_HIGH, 0x01234567);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_AVAIL_LOW, 0x76543210);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_AVAIL_HIGH, 0xfedcba98);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_USED_LOW, 0x13572468);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_USED_HIGH, 0x24681357);
+
+    ASSERT_EQUAL_U(128, dev.queue.num);
+    ASSERT_EQUAL_U(1, dev.queue.ready);
+    ASSERT_EQUAL_U(0x0123456789abcdefULL, dev.queue.desc);
+    ASSERT_EQUAL_U(0xfedcba9876543210ULL, dev.queue.avail);
+    ASSERT_EQUAL_U(0x2468135713572468ULL, dev.queue.used);
+}
+
+CTEST(blkd_virtio, acknowledges_vring_interrupt_with_uapi_bit)
+{
+    struct blkd_block_backend backend = {.fd = -1, .image_len = 64 * 1024 * 1024, .readonly = false};
+    struct blkd_virtio_device dev;
+    struct virtio_mmio mmio;
+
+    blkd_virtio_init(&dev, &backend);
+    virtio_mmio_init(&mmio, &dev.vdev);
+    virtio_mmio_used_buffer(&mmio);
+
+    ASSERT_EQUAL_U(VIRTIO_MMIO_INT_VRING, virtio_mmio_read(&mmio, VIRTIO_MMIO_INTERRUPT_STATUS, 4));
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_INTERRUPT_ACK, VIRTIO_MMIO_INT_VRING);
+    ASSERT_EQUAL_U(0, virtio_mmio_read(&mmio, VIRTIO_MMIO_INTERRUPT_STATUS, 4));
 }
 
 CTEST(cond_virtio, status_zero_resets_all_queue_state)
 {
     struct cond_console_backend backend = {.fd = -1};
     struct cond_virtio_device dev;
+    struct virtio_mmio mmio;
 
     cond_virtio_init(&dev, &backend);
-    cond_virtio_mmio_write(&dev, 0x030, 1);
-    cond_virtio_mmio_write(&dev, 0x038, 128);
-    cond_virtio_mmio_write(&dev, 0x044, 1);
-    cond_virtio_mmio_write(&dev, 0x080, 0x1000);
-    cond_virtio_mmio_write(&dev, 0x090, 0x2000);
-    cond_virtio_mmio_write(&dev, 0x0a0, 0x3000);
-    cond_virtio_mmio_write(&dev, 0x070, 0xf);
+    virtio_mmio_init(&mmio, &dev.vdev);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_SEL, 1);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_NUM, 128);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_READY, 1);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_DESC_LOW, 0x1000);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_AVAIL_LOW, 0x2000);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_QUEUE_USED_LOW, 0x3000);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_STATUS,
+                           VIRTIO_CONFIG_S_ACKNOWLEDGE |
+                           VIRTIO_CONFIG_S_DRIVER |
+                           VIRTIO_CONFIG_S_DRIVER_OK |
+                           VIRTIO_CONFIG_S_FEATURES_OK);
 
-    dev.interrupt_status = 1;
+    dev.vdev.interrupt_status = 1;
     dev.queues[0].ready = 1;
     dev.queues[0].last_avail_idx = 5;
     dev.queues[1].last_avail_idx = 7;
-    cond_virtio_mmio_write(&dev, 0x070, 0);
+    virtio_mmio_write(&mmio, VIRTIO_MMIO_STATUS, 0);
 
-    ASSERT_EQUAL_U(0, dev.queue_sel);
-    ASSERT_EQUAL_U(0, dev.status);
-    ASSERT_EQUAL_U(0, dev.interrupt_status);
+    ASSERT_EQUAL_U(0, mmio.queue_sel);
+    ASSERT_EQUAL_U(0, dev.vdev.status);
+    ASSERT_EQUAL_U(0, dev.vdev.interrupt_status);
     for (uint32_t i = 0; i < COND_QUEUE_COUNT; i++) {
         ASSERT_EQUAL_U(COND_QUEUE_SIZE, dev.queues[i].num);
         ASSERT_EQUAL_U(0, dev.queues[i].ready);
         ASSERT_EQUAL_U(0, dev.queues[i].desc);
-        ASSERT_EQUAL_U(0, dev.queues[i].driver);
-        ASSERT_EQUAL_U(0, dev.queues[i].device);
+        ASSERT_EQUAL_U(0, dev.queues[i].avail);
+        ASSERT_EQUAL_U(0, dev.queues[i].used);
         ASSERT_EQUAL_U(0, dev.queues[i].last_avail_idx);
     }
 }

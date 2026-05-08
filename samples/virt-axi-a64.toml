@@ -17,13 +17,13 @@ parameters = { memory = "512M", kvm = false, pcie = false, cpu = "max" }
 
 [[targets.qemu.devices]]
 name = "blk0"
-socket = "run/axi-bus-a64.sock"
-log = "run/axi-bus-a64-backend.log"
+socket = "run/virt-axi-a64.sock"
+log = "run/virt-axi-a64-backend.log"
 image = "run/blk0.img"
 readonly = false
 
 [[targets.qemu.devices]]
 name = "con0"
-socket = "run/axi-console-a64.sock"
-log = "run/axi-console-a64-backend.log"
+socket = "run/virt-axi-console-a64.sock"
+log = "run/virt-axi-console-a64-backend.log"
 output = "run/cond-a64.out"

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://chiplets.local/schemas/runtime-config.schema.json",
-  "title": "chiplets axi-bus runtime config",
+  "title": "chiplets virt-axi runtime config",
   "type": "object",
   "additionalProperties": false,
   "required": ["devices", "targets"],

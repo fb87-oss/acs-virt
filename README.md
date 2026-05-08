@@ -9,7 +9,7 @@ The current working path is:
 Linux guest
   -> upstream virtio_mmio + virtio_blk drivers
   -> MMIO window at 0xfeb00000
-  -> QEMU axi-bus device
+  -> QEMU virt-axi device
   -> Unix socket protocol
   -> C blkd
   -> run/blk0.img
@@ -17,7 +17,7 @@ Linux guest
 Linux guest
   -> upstream virtio_mmio + virtio_console drivers
   -> MMIO window at 0xfeb00200
-  -> QEMU axi-bus device
+  -> QEMU virt-axi device
   -> Unix socket protocol
   -> C cond
   -> run/cond.out
@@ -38,10 +38,10 @@ backends own virtio-mmio register models, virtqueue processing, and endpoint I/O
 - Keep runtime configuration TOML-driven.
 - The Python launcher owns backend lifecycle by default; use `--no-backend` for
   manual backend launches.
-- Use `samples/axi-bus-x64.toml` and `samples/axi-bus-a64.toml` as sample
+- Use `samples/virt-axi-x64.toml` and `samples/virt-axi-a64.toml` as sample
   frontend VM and backend launch configs.
-- Use `run/axi-bus.sock` as the frontend/backend socket.
-- Use `run/axi-console.sock` as the frontend/console-backend socket.
+- Use `run/virt-axi.sock` as the frontend/backend socket.
+- Use `run/virt-axi-console.sock` as the frontend/console-backend socket.
 - Use `run/blk0.img` as the block image.
 - Current RAM access mode is `qemu-mediated`; `shared-mem` is the planned fast
   path.
@@ -59,20 +59,15 @@ scripts/build-qemu-arm64.sh                   CMake-backed AArch64 QEMU build sc
 scripts/chiplets-launcher.py                  TOML orchestrator and QEMU launcher
 tests/run-tests.sh                            end-to-end smoke test
 tests/run-benchmark.sh                        dd throughput benchmark
-samples/axi-bus-x64.toml                      x86_64 sample frontend/backend config
-samples/axi-bus-a64.toml                      AArch64 sample frontend/backend config
+samples/virt-axi-x64.toml                      x86_64 sample frontend/backend config
+samples/virt-axi-a64.toml                      AArch64 sample frontend/backend config
 docs/runtime-config.md                        config schema and authoring guide
 docs/runtime-config.schema.json               machine-readable runtime schema
 docs/qemu-target-toolchains.md                QEMU target file guide
-src/bin/blkd.c                                C blkd main/config entry point
-src/bin/blkd-axi.c                            C axi-bus socket transport
-src/bin/blkd-virtio.c                         C virtio-mmio/virtio-blk device model
-src/bin/blkd-block.c                          C block image backend
-src/bin/cond.c                                C cond main/config entry point
-src/bin/cond-axi.c                            C virtio-console axi-bus transport
-src/bin/cond-virtio.c                         C virtio-mmio/virtio-console model
-src/bin/cond-console.c                        C console output backend
-docs/axi-bus-protocol.md                      QEMU/backend socket protocol
+src/fabrics/virt-axi.c                         C virt-axi socket fabric transport
+src/drivers/virtio-blkd.c                     C virtio-blk daemon and device model
+src/drivers/virtio-consoled.c                 C virtio-console daemon and device model
+docs/virt-axi-protocol.md                      QEMU/backend socket protocol
 patches/qemu/*.patch                          QEMU source changes
 ```
 
@@ -118,7 +113,7 @@ Patch docs live beside the patches:
 ```text
 patches/qemu/0001-add-x86-64-microvm-minimal-device-config.patch.md
 patches/qemu/0002-add-microvm-virtio-mmio-transport-count.patch.md
-patches/qemu/0003-add-axi-bus-device.patch.md
+patches/qemu/0003-add-virt-axi-device.patch.md
 ```
 
 ## Build C Tools
@@ -132,34 +127,34 @@ scripts/build-tools.sh
 The output binaries are:
 
 ```text
-out/blkd
-out/cond
+out/virtio-blkd
+out/virtio-consoled
 out/c-backend-tests
 ```
 
 For individual targets, invoke CMake directly after configuration, for example:
 
 ```sh
-cmake --build build/cmake --target blkd
-cmake --build build/cmake --target cond
+cmake --build build/cmake --target virtio-blkd
+cmake --build build/cmake --target virtio-consoled
 ```
 
 ## Run Backend Manually
 
-The launcher starts `blkd` and `cond` automatically. For manual debugging, create
+The launcher starts `virtio-blkd` and `virtio-consoled` automatically. For manual debugging, create
 the runtime image and start a backend with comma-separated arguments:
 
 ```sh
 mkdir -p run
 truncate -s 64M run/blk0.img
 scripts/build-tools.sh
-out/blkd name=blk0,socket=run/axi-bus.sock,image=run/blk0.img,readonly=false,ram_access=qemu-mediated
+out/virtio-blkd name=blk0,socket=run/virt-axi.sock,image=run/blk0.img,readonly=false,ram_access=qemu-mediated
 ```
 
 The backend listens on:
 
 ```text
-run/axi-bus.sock
+run/virt-axi.sock
 ```
 
 ## Run Frontend VM
@@ -167,25 +162,25 @@ run/axi-bus.sock
 Launch the VM and its configured backends:
 
 ```sh
-nix run .#runvm-x64 -- samples/axi-bus-x64.toml
+nix run .#runvm-x64 -- samples/virt-axi-x64.toml
 ```
 
 Inspect the generated QEMU command without launching:
 
 ```sh
-nix run .#runvm-x64 -- --dry-run samples/axi-bus-x64.toml
+nix run .#runvm-x64 -- --dry-run samples/virt-axi-x64.toml
 ```
 
 Pass extra QEMU arguments after `--`:
 
 ```sh
-nix run .#runvm-x64 -- samples/axi-bus-x64.toml -- -serial mon:stdio
+nix run .#runvm-x64 -- samples/virt-axi-x64.toml -- -serial mon:stdio
 ```
 
 Launch only QEMU and assume backend sockets are already served manually:
 
 ```sh
-nix run .#runvm-x64 -- --no-backend samples/axi-bus-x64.toml
+nix run .#runvm-x64 -- --no-backend samples/virt-axi-x64.toml
 ```
 
 ## QEMU Machine Setup
@@ -200,7 +195,7 @@ Meaning:
 
 - `microvm` is the minimal x86_64 frontend machine.
 - `pcie=off` keeps the platform MMIO-only.
-- `ioapic2=on` keeps the microvm IRQ topology explicit for `axi-bus`.
+- `ioapic2=on` keeps the microvm IRQ topology explicit for `virt-axi`.
 - `virtio-mmio-transports=0` disables QEMU's built-in virtio-mmio transport
   slots.
 - `memory-backend=guestmem` uses the configured memfd RAM backend.
@@ -208,27 +203,27 @@ Meaning:
 The launcher emits one custom QEMU device per active MMIO window:
 
 ```text
--device axi-bus,id=blk0,base=0xfeb00000,size=0x200,irq=16,
-  socket=/.../run/axi-bus.sock,ram-access=qemu-mediated,target=blk0
--device axi-bus,id=con0,base=0xfeb00200,size=0x200,irq=17,
-  socket=/.../run/axi-console.sock,ram-access=qemu-mediated,target=con0
+-device virt-axi,id=blk0,base=0xfeb00000,size=0x200,irq=16,
+  socket=/.../run/virt-axi.sock,ram-access=qemu-mediated,target=blk0
+-device virt-axi,id=con0,base=0xfeb00200,size=0x200,irq=17,
+  socket=/.../run/virt-axi-console.sock,ram-access=qemu-mediated,target=con0
 ```
 
 ## IRQ Rule
 
 The frontend config assigns QEMU IO-APIC GSIs from the project-reserved microvm
-`axi-bus` range, `16..23`:
+`virt-axi` range, `16..23`:
 
 ```toml
 irq = 16
 ```
 
-The launcher passes the GSI to QEMU's `axi-bus` device. Patched microvm ACPI
+The launcher passes the GSI to QEMU's `virt-axi` device. Patched microvm ACPI
 exports the same GSI to Linux as the virtio-mmio interrupt resource, avoiding
 manual Linux IRQ-number guessing.
 
 The active devices use separate interrupt lines: `blkd` uses GSI `16`, and
-`cond` uses GSI `17`.
+`virtio-consoled` uses GSI `17`.
 
 ## Smoke Test
 
@@ -241,7 +236,7 @@ tests/run-tests.sh
 The test:
 
 - creates `run/blk0.img`
-- launches `blkd` and `cond` through `scripts/chiplets-launcher.py`
+- launches `virtio-blkd` and `virtio-consoled` through `scripts/chiplets-launcher.py`
 - boots the frontend VM
 - waits for `/dev/vda`
 - writes one 512-byte sector
@@ -251,11 +246,11 @@ The test:
 Expected output:
 
 ```text
-axi-bus backend/frontend smoke test passed
-backend log: run/axi-bus-backend.log
-console backend log: run/axi-console-backend.log
+virt-axi backend/frontend smoke test passed
+backend log: run/virt-axi-backend.log
+console backend log: run/virt-axi-console-backend.log
 console output: run/cond.out
-guest log:   run/axi-bus-guest.log
+guest log:   run/virt-axi-guest.log
 ```
 
 ## Benchmark

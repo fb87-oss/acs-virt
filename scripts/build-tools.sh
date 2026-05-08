@@ -10,4 +10,4 @@ if [[ -z "${IN_NIX_SHELL:-}" && -z "${CHIPLETS_CMAKE_NIX_SHELL:-}" ]]; then
 fi
 
 cmake -S "$root_dir" -B "$cmake_build_dir" -G Ninja -DCHIPLETS_FETCH_QEMU=OFF
-cmake --build "$cmake_build_dir" --target blkd cond c-backend-tests --parallel
+cmake --build "$cmake_build_dir" --target virtio-blkd virtio-consoled c-backend-tests --parallel

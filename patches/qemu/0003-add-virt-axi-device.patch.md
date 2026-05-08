@@ -1,6 +1,6 @@
-# 0003-add-axi-bus-device.patch
+# 0003-add-virt-axi-device.patch
 
-This patch adds the custom QEMU `axi-bus` sysbus device.
+This patch adds the custom QEMU `virt-axi` sysbus device.
 
 It modifies:
 
@@ -16,12 +16,12 @@ hw/misc/meson.build
 It creates:
 
 ```text
-hw/misc/axi-bus.c
+hw/misc/virt-axi.c
 ```
 
 ## Purpose
 
-`axi-bus` is the QEMU-side anchor for the external backend path. It exposes a
+`virt-axi` is the QEMU-side anchor for the external backend path. It exposes a
 configurable MMIO window to the guest and forwards guest MMIO accesses to a
 userspace backend over a Unix socket.
 
@@ -44,11 +44,11 @@ target=<backend target name>
 The current launcher emits a device like:
 
 ```text
--device axi-bus,id=blk0,base=0xfeb00000,size=0x200,irq=16,
-  socket=/.../run/axi-bus.sock,ram-access=qemu-mediated,target=blk0
+-device virt-axi,id=blk0,base=0xfeb00000,size=0x200,irq=16,
+  socket=/.../run/virt-axi.sock,ram-access=qemu-mediated,target=blk0
 ```
 
-For `microvm`, `irq` must be inside the project-reserved `axi-bus` range,
+For `microvm`, `irq` must be inside the project-reserved `virt-axi` range,
 `16..23`, and the machine must have `ioapic2=on`.
 
 For AArch64 `virt`, the device maps the MMIO window, wires the configured GIC
@@ -73,7 +73,7 @@ ERROR
 The protocol is documented in:
 
 ```text
-docs/axi-bus-protocol.md
+docs/virt-axi-protocol.md
 ```
 
 ## QEMU Responsibilities

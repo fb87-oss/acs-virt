@@ -8,8 +8,8 @@ inventory in `[[devices]]` with target-specific enablement in
 The sample configs are:
 
 ```text
-samples/axi-bus-x64.toml  x86_64 microvm
-samples/axi-bus-a64.toml  AArch64 virt
+samples/virt-axi-x64.toml  x86_64 microvm
+samples/virt-axi-a64.toml  AArch64 virt
 ```
 
 The machine-readable schema for the TOML data model, expressed as JSON Schema for
@@ -96,8 +96,8 @@ Fields:
 
 Supported QEMU target types:
 
-- `microvm`: x86_64 microvm. Uses patched ACPI discovery for `axi-bus` devices.
-- `virt`: AArch64 virt. Uses generated FDT `virtio,mmio` discovery for `axi-bus`
+- `microvm`: x86_64 microvm. Uses patched ACPI discovery for `virt-axi` devices.
+- `virt`: AArch64 virt. Uses generated FDT `virtio,mmio` discovery for `virt-axi`
   devices.
 
 QEMU data files:
@@ -117,15 +117,15 @@ emitted on the QEMU command line and launched through backend daemons.
 ```toml
 [[targets.qemu.devices]]
 name = "blk0"
-socket = "run/axi-bus.sock"
-log = "run/axi-bus-backend.log"
+socket = "run/virt-axi.sock"
+log = "run/virt-axi-backend.log"
 image = "run/blk0.img"
 readonly = false
 
 [[targets.qemu.devices]]
 name = "con0"
-socket = "run/axi-console.sock"
-log = "run/axi-console-backend.log"
+socket = "run/virt-axi-console.sock"
+log = "run/virt-axi-console-backend.log"
 output = "run/cond.out"
 ```
 
@@ -142,7 +142,7 @@ Fields for `type = "virtio-blk"`:
 
 Fields for `type = "virtio-console"`:
 
-- `output`: optional output path passed to `cond`. If omitted, `cond` writes to
+- `output`: optional output path passed to `virtio-consoled`. If omitted, `virtio-consoled` writes to
   stdout.
 
 Guidelines:
@@ -161,8 +161,8 @@ The launcher starts backend daemons with one comma-separated `key=value` argumen
 Examples from the sample config:
 
 ```text
-out/blkd name=blk0,socket=/.../run/axi-bus.sock,ram_access=qemu-mediated,image=/.../run/blk0.img,readonly=false
-out/cond name=con0,socket=/.../run/axi-console.sock,ram_access=qemu-mediated,output=/.../run/cond.out
+out/virtio-blkd name=blk0,socket=/.../run/virt-axi.sock,ram_access=qemu-mediated,image=/.../run/blk0.img,readonly=false
+out/virtio-consoled name=con0,socket=/.../run/virt-axi-console.sock,ram_access=qemu-mediated,output=/.../run/cond.out
 ```
 
 Use `--no-backend` to launch only QEMU and manage backend daemons manually.
@@ -179,12 +179,12 @@ mmio = { base = "0xfeb00400", size = "0x200", irq = 18 }
 
 [[targets.qemu.devices]]
 name = "con1"
-socket = "run/axi-console-con1.sock"
-log = "run/axi-console-con1-backend.log"
+socket = "run/virt-axi-console-con1.sock"
+log = "run/virt-axi-console-con1-backend.log"
 output = "run/con1.out"
 ```
 
-Current limitation: `cond` and `blkd` are single-device daemons. The launcher can
+Current limitation: `virtio-consoled` and `blkd` are single-device daemons. The launcher can
 spawn one daemon per enabled device, but backend support for additional concrete
 types must be implemented before adding types beyond `virtio-blk` and
 `virtio-console`.
