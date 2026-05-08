@@ -1,7 +1,0 @@
-[block]
-image = "run/blk0.img"
-readonly = false
-
-[transport.qemu_mmio]
-socket = "run/axi-bus.sock"
-ram_access = "qemu-mediated"

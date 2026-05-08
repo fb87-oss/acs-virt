@@ -4,8 +4,6 @@ set -euo pipefail
 bench_size_mb=${BENCH_SIZE_MB:-16}
 bs=${BENCH_BS:-64K}
 guest_timeout=${BENCH_GUEST_TIMEOUT:-180}
-backend_timeout=${BENCH_BACKEND_TIMEOUT:-220}
-
 case "$bs" in
   *K) bs_bytes=$(( ${bs%K} * 1024 )) ;;
   *M) bs_bytes=$(( ${bs%M} * 1024 * 1024 )) ;;
@@ -30,43 +28,11 @@ fi
 
 mkdir -p run
 truncate -s 64M run/blk0.img
-rm -f run/cond.out
+rm -f run/cond.out run/axi-bus-backend.log run/axi-console-backend.log run/axi-bus-bench-guest.log
 
-if [ ! -x out/blkd ] || [ ! -x out/cond ] || [ ! -x out/qemu-launch ]; then
-  scripts/build-tools.sh
-fi
-
-backend_log=run/axi-bus-bench-backend.log
-console_backend_log=run/axi-console-bench-backend.log
+backend_log=run/axi-bus-backend.log
+console_backend_log=run/axi-console-backend.log
 guest_log=run/axi-bus-bench-guest.log
-
-timeout "$backend_timeout" "${BACKEND_BIN:-out/blkd}" configs/backends/axi-bus.toml \
-  > "$backend_log" 2>&1 &
-backend_pid=$!
-
-timeout "$backend_timeout" "${CONSOLE_BACKEND_BIN:-out/cond}" configs/backends/axi-console.toml \
-  > "$console_backend_log" 2>&1 &
-console_backend_pid=$!
-
-cleanup() {
-  kill "$backend_pid" 2>/dev/null || true
-  kill "$console_backend_pid" 2>/dev/null || true
-  wait "$backend_pid" 2>/dev/null || true
-  wait "$console_backend_pid" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-for _ in $(seq 1 50); do
-  test -S run/axi-bus.sock && test -S run/axi-console.sock && break
-  sleep 0.2
-done
-
-if [ ! -S run/axi-bus.sock ] || [ ! -S run/axi-console.sock ]; then
-  echo "backend sockets were not created" >&2
-  echo "backend log: $backend_log" >&2
-  echo "console backend log: $console_backend_log" >&2
-  exit 1
-fi
 
 set +e
 (
@@ -80,7 +46,7 @@ set +e
   printf 'echo READ_BENCH_START\n'
   printf 'dd if=/dev/vda of=/dev/null bs=%s count=%s 2>&1\n' "$bs" "$count"
   printf 'echo READ_BENCH_END\n'
-) | timeout "$guest_timeout" nix run .#runvm -- configs/qemu-vms/axi-bus.toml \
+) | timeout "$guest_timeout" nix run .#runvm -- configs/axi-bus.toml \
   > "$guest_log" 2>&1
 guest_status=$?
 set -e

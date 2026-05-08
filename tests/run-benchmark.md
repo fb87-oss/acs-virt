@@ -3,9 +3,9 @@
 `tests/run-benchmark.sh` runs a simple end-to-end throughput benchmark for the
 current `axi-bus` backend/frontend path.
 
-The script starts the block backend and the `cond` console backend, boots the
-QEMU microvm through `nix run .#runvm`, waits for `/dev/vda` in the guest, then
-runs `dd` write and read tests against the virtio block device.
+The script boots the QEMU microvm through `nix run .#runvm`, which starts the
+configured backends through `scripts/chiplets-launcher.py`, waits for `/dev/vda`
+in the guest, then runs `dd` write and read tests against the virtio block device.
 
 ## Defaults
 
@@ -13,7 +13,6 @@ runs `dd` write and read tests against the virtio block device.
 BENCH_SIZE_MB=16
 BENCH_BS=64K
 BENCH_GUEST_TIMEOUT=180
-BENCH_BACKEND_TIMEOUT=220
 ```
 
 The default benchmark writes and reads 16 MiB using 64 KiB `dd` blocks.
@@ -30,28 +29,14 @@ Custom size and block size:
 BENCH_SIZE_MB=32 BENCH_BS=128K tests/run-benchmark.sh
 ```
 
-Run with explicit backend overrides:
-
-```sh
-scripts/build-tools.sh
-BACKEND_BIN=out/blkd tests/run-benchmark.sh
-```
-
-The console backend is always started because the VM config includes a second
-`axi-bus` MMIO window for virtio-console. Override it with:
-
-```sh
-CONSOLE_BACKEND_BIN=out/cond tests/run-benchmark.sh
-```
-
 ## Runtime Files
 
 The script creates or overwrites:
 
 ```text
 run/blk0.img
-run/axi-bus-bench-backend.log
-run/axi-console-bench-backend.log
+run/axi-bus-backend.log
+run/axi-console-backend.log
 run/axi-bus-bench-guest.log
 ```
 

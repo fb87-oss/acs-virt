@@ -1,0 +1,29 @@
+ram_access = "qemu-mediated"
+
+[[devices]]
+name = "blk0"
+type = "virtio-blk"
+mmio = { base = "0xfeb00000", size = "0x200", irq = 16 }
+
+[[devices]]
+name = "con0"
+type = "virtio-console"
+mmio = { base = "0xfeb00200", size = "0x200", irq = 17 }
+
+[targets.qemu]
+type = "microvm"
+binary = "out/qemu-x64-minimal/bin/qemu-system-x86_64"
+parameters = { memory = "512M", kvm = true, pcie = false }
+
+[[targets.qemu.devices]]
+name = "blk0"
+socket = "run/axi-bus.sock"
+log = "run/axi-bus-backend.log"
+image = "run/blk0.img"
+readonly = false
+
+[[targets.qemu.devices]]
+name = "con0"
+socket = "run/axi-console.sock"
+log = "run/axi-console-backend.log"
+output = "run/cond.out"

@@ -18,24 +18,26 @@ cond.h           shared structs, constants, and declarations
 
 ## Config
 
-`cond` reads:
+The launcher starts `cond` with one comma-separated `key=value` argument:
 
 ```text
-configs/backends/axi-console.toml
+out/cond name=con0,socket=run/axi-console.sock,output=run/cond.out,ram_access=qemu-mediated
 ```
 
-The current config shape is:
+The launcher derives those values from this config shape:
 
 ```toml
-[console]
-output = "run/cond.out"
+[[devices]]
+name = "con0"
+type = "virtio-console"
 
-[transport.qemu_mmio]
+[[targets.qemu.devices]]
+name = "con0"
 socket = "run/axi-console.sock"
-ram_access = "qemu-mediated"
+output = "run/cond.out"
 ```
 
-TOML parsing uses `fastoml`, fetched by CMake.
+`cond.c` does not parse TOML; config joining is owned by the Python launcher.
 
 ## Runtime Role
 

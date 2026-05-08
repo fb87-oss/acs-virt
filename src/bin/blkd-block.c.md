@@ -3,7 +3,7 @@
 `blkd-block.c` implements the C backend's block image access layer.
 
 It is intentionally small: the file exposes open, close, read, write, and flush
-helpers for the disk image configured in `configs/backends/axi-bus.toml`.
+helpers for the disk image path passed to `blkd` by the launcher.
 
 ## Responsibilities
 

@@ -76,15 +76,15 @@
 
     runvm = pkgs.writeShellScriptBin "runvm" ''
       if [ "$#" -lt 1 ]; then
-        echo "usage: runvm <configs/qemu-vms/*.toml> [-- <qemu-args>...]" >&2
+      echo "usage: runvm [--dry-run] [--no-backend] <configs/*.toml> [-- <qemu-args>...]" >&2
         exit 2
       fi
 
-      if [ ! -x "$PWD/out/qemu-launch" ]; then
+      if [ ! -x "$PWD/out/blkd" ] || [ ! -x "$PWD/out/cond" ]; then
         "$PWD/scripts/build-tools.sh"
       fi
 
-      exec "$PWD/out/qemu-launch" \
+      exec ${pkgs.python3}/bin/python3 "$PWD/scripts/chiplets-launcher.py" \
         --kernel ${kernel}/bzImage \
         --initrd ${initrd} \
         "$@"

@@ -14,118 +14,61 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#define FASTOML_IMPLEMENTATION
-#include "fastoml.h"
-
-static bool read_file(const char *path, char **out, size_t *out_len)
+static bool copy_value(const char *value, char *out, size_t out_len)
 {
-    FILE *f = fopen(path, "rb");
-    long len;
-    char *buf;
+    size_t len = strlen(value);
 
-    if (!f) {
-        perror("cond: fopen config");
+    if (len >= out_len) {
         return false;
     }
-    if (fseek(f, 0, SEEK_END) < 0) {
-        fclose(f);
-        return false;
-    }
-    len = ftell(f);
-    if (len < 0 || fseek(f, 0, SEEK_SET) < 0) {
-        fclose(f);
-        return false;
-    }
-
-    buf = malloc((size_t)len + 1);
-    if (!buf) {
-        fclose(f);
-        return false;
-    }
-    if (fread(buf, 1, (size_t)len, f) != (size_t)len) {
-        free(buf);
-        fclose(f);
-        return false;
-    }
-    fclose(f);
-    buf[len] = '\0';
-    *out = buf;
-    *out_len = (size_t)len;
+    memcpy(out, value, len + 1);
     return true;
 }
 
-static bool copy_toml_string(const fastoml_node *table, const char *key, char *out, size_t out_len)
+static bool parse_config_arg(const char *arg, struct cond_config *cfg)
 {
-    const fastoml_node *node = fastoml_table_get_cstr(table, key);
-    fastoml_slice value;
-
-    if (!node || fastoml_node_as_slice(node, &value) != FASTOML_OK || (size_t)value.len >= out_len) {
-        return false;
-    }
-    memcpy(out, value.ptr, value.len);
-    out[value.len] = '\0';
-    return true;
-}
-
-static bool parse_config(const char *path, struct cond_config *cfg)
-{
-    char *text = NULL;
-    size_t text_len = 0;
-    fastoml_options options;
-    fastoml_parser *parser;
-    const fastoml_document *doc = NULL;
-    fastoml_error err;
-    fastoml_status status;
-    const fastoml_node *root;
-    const fastoml_node *console;
-    const fastoml_node *transport;
-    const fastoml_node *qemu_mmio;
-    bool ok = false;
+    char *copy;
+    char *save = NULL;
 
     cfg->socket[0] = '\0';
     strcpy(cfg->ram_access, "shared-mem");
     strcpy(cfg->output, "-");
 
-    if (!read_file(path, &text, &text_len)) {
+    copy = strdup(arg);
+    if (!copy) {
         return false;
     }
 
-    fastoml_options_default(&options);
-    parser = fastoml_parser_create(&options);
-    if (!parser) {
-        free(text);
-        return false;
+    for (char *part = strtok_r(copy, ",", &save); part; part = strtok_r(NULL, ",", &save)) {
+        char *value = strchr(part, '=');
+        if (!value) {
+            free(copy);
+            return false;
+        }
+        *value++ = '\0';
+        if (!strcmp(part, "socket")) {
+            if (!copy_value(value, cfg->socket, sizeof(cfg->socket))) {
+                free(copy);
+                return false;
+            }
+        } else if (!strcmp(part, "output")) {
+            if (!copy_value(value, cfg->output, sizeof(cfg->output))) {
+                free(copy);
+                return false;
+            }
+        } else if (!strcmp(part, "ram_access")) {
+            if (!copy_value(value, cfg->ram_access, sizeof(cfg->ram_access))) {
+                free(copy);
+                return false;
+            }
+        } else if (strcmp(part, "name")) {
+            free(copy);
+            return false;
+        }
     }
 
-    status = fastoml_parse(parser, text, text_len, &doc, &err);
-    if (status != FASTOML_OK) {
-        fprintf(stderr, "cond: TOML parse error %s at line %u column %u\n",
-                fastoml_status_string(status), err.line, err.column);
-        goto out;
-    }
-
-    root = fastoml_doc_root(doc);
-    console = fastoml_table_get_cstr(root, "console");
-    transport = fastoml_table_get_cstr(root, "transport");
-    qemu_mmio = transport ? fastoml_table_get_cstr(transport, "qemu_mmio") : NULL;
-    if (!qemu_mmio || !copy_toml_string(qemu_mmio, "socket", cfg->socket, sizeof(cfg->socket))) {
-        goto out;
-    }
-    if (fastoml_table_get_cstr(qemu_mmio, "ram_access") &&
-        !copy_toml_string(qemu_mmio, "ram_access", cfg->ram_access, sizeof(cfg->ram_access))) {
-        goto out;
-    }
-    if (console && fastoml_table_get_cstr(console, "output") &&
-        !copy_toml_string(console, "output", cfg->output, sizeof(cfg->output))) {
-        goto out;
-    }
-
-    ok = true;
-
-out:
-    fastoml_parser_destroy(parser);
-    free(text);
-    return ok;
+    free(copy);
+    return cfg->socket[0];
 }
 
 static bool ensure_parent_dir(const char *path)
@@ -174,11 +117,11 @@ int main(int argc, char **argv)
     struct sockaddr_un addr;
 
     if (argc != 2) {
-        fprintf(stderr, "usage: cond <backend.toml>\n");
+        fprintf(stderr, "usage: cond name=<name>,socket=<path>[,output=<path>][,ram_access=<mode>]\n");
         return 2;
     }
-    if (!parse_config(argv[1], &cfg)) {
-        fprintf(stderr, "cond: failed to parse config %s\n", argv[1]);
+    if (!parse_config_arg(argv[1], &cfg)) {
+        fprintf(stderr, "cond: failed to parse config args\n");
         return 1;
     }
     if (!cond_console_open(&backend, cfg.output)) {

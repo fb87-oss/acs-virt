@@ -1,6 +1,0 @@
-[console]
-output = "run/cond.out"
-
-[transport.qemu_mmio]
-socket = "run/axi-console.sock"
-ram_access = "qemu-mediated"

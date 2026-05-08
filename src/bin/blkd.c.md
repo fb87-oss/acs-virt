@@ -36,27 +36,27 @@ blkd.h          shared structs, constants, and function declarations
 
 ## Config
 
-The daemon reads the existing backend TOML file:
+The launcher starts the daemon with one comma-separated `key=value` argument:
 
 ```text
-configs/backends/axi-bus.toml
+out/blkd name=blk0,socket=run/axi-bus.sock,image=run/blk0.img,readonly=false,ram_access=qemu-mediated
 ```
 
-It understands the current keys:
+The launcher derives those values from this config shape:
 
 ```toml
-[block]
+[[devices]]
+name = "blk0"
+type = "virtio-blk"
+
+[[targets.qemu.devices]]
+name = "blk0"
+socket = "run/axi-bus.sock"
 image = "run/blk0.img"
 readonly = false
-
-[transport.qemu_mmio]
-socket = "run/axi-bus.sock"
-ram_access = "qemu-mediated"
 ```
 
-`blkd.c` parses TOML using `fastoml`, fetched by CMake.
-
-The daemon only consumes the keys listed above.
+`blkd.c` does not parse TOML; config joining is owned by the Python launcher.
 
 ## Protocol
 

@@ -36,9 +36,9 @@ backends own virtio-mmio register models, virtqueue processing, and endpoint I/O
   QEMU-created virtio-mmio transports for the active path.
 - Keep guest Linux unmodified; use upstream `virtio_mmio` and `virtio_blk`.
 - Keep runtime configuration TOML-driven.
-- Keep backend launch separate from frontend VM launch.
-- Use `configs/qemu-vms/axi-bus.toml` for the frontend VM.
-- Use `configs/backends/axi-bus.toml` for the backend.
+- The Python launcher owns backend lifecycle by default; use `--no-backend` for
+  manual backend launches.
+- Use `configs/axi-bus.toml` for the frontend VM and backend launch parameters.
 - Use `run/axi-bus.sock` as the frontend/backend socket.
 - Use `run/axi-console.sock` as the frontend/console-backend socket.
 - Use `run/blk0.img` as the block image.
@@ -54,11 +54,10 @@ CMakeLists.txt                                C tools/tests and QEMU fetch targe
 flake.nix                                      Nix run wrapper and initrd setup
 scripts/build-tools.sh                        CMake build for local C tools/tests
 scripts/build-qemu-x64.sh                     CMake-backed minimal QEMU build script
+scripts/chiplets-launcher.py                  TOML orchestrator and QEMU launcher
 tests/run-tests.sh                            end-to-end smoke test
 tests/run-benchmark.sh                        dd throughput benchmark
-configs/qemu-vms/axi-bus.toml                 frontend VM config
-configs/backends/axi-bus.toml                 backend config
-src/bin/qemu-launch.c                         TOML-to-QEMU launcher
+configs/axi-bus.toml                          combined frontend/backend config
 src/bin/blkd.c                                C blkd main/config entry point
 src/bin/blkd-axi.c                            C axi-bus socket transport
 src/bin/blkd-virtio.c                         C virtio-mmio/virtio-blk device model
@@ -82,7 +81,7 @@ scripts/build-qemu-x64.sh
 The script:
 
 - re-enters a Nix shell with the required CMake and QEMU build tools
-- uses CMake `FetchContent` to fetch QEMU
+- uses CMake `ExternalProject` to fetch QEMU
 - copies the fetched QEMU source to `build/qemu-src-x64-minimal`
 - applies `patches/qemu/*.patch`
 - uses `ccache`
@@ -90,11 +89,13 @@ The script:
   `--without-default-devices`
 - builds `x86_64-softmmu`
 - installs `out/qemu-x64-minimal/bin/qemu-system-x86_64`
+- copies QEMU runtime BIOS/data files into `out/qemu-x64-minimal/share/qemu`
 
-QEMU runtime BIOS/data files are loaded from a generated symlink:
+The launcher derives QEMU's data directory from the configured `binary` path and
+passes it with `-L` when `../share/qemu` exists:
 
 ```text
-build/qemu-pc-bios
+out/qemu-x64-minimal/share/qemu
 ```
 
 ## Check QEMU Patches
@@ -115,7 +116,7 @@ patches/qemu/0003-add-axi-bus-device.patch.md
 
 ## Build C Tools
 
-Build the C launcher, backends, and unit-test binary:
+Build the C backends and unit-test binary:
 
 ```sh
 scripts/build-tools.sh
@@ -126,29 +127,26 @@ The output binaries are:
 ```text
 out/blkd
 out/cond
-out/qemu-launch
 out/c-backend-tests
 ```
 
-`scripts/build-blkd.sh` and `scripts/build-cond.sh` remain as target-specific
-wrappers around CMake.
+For individual targets, invoke CMake directly after configuration, for example:
 
-`cond` is wired to the second MMIO window in the default frontend config. Its
-backend config is:
-
-```text
-configs/backends/axi-console.toml
+```sh
+cmake --build build/cmake --target blkd
+cmake --build build/cmake --target cond
 ```
 
-## Run Backend
+## Run Backend Manually
 
-Create the runtime image and start the block backend:
+The launcher starts `blkd` and `cond` automatically. For manual debugging, create
+the runtime image and start a backend with comma-separated arguments:
 
 ```sh
 mkdir -p run
 truncate -s 64M run/blk0.img
 scripts/build-tools.sh
-out/blkd configs/backends/axi-bus.toml
+out/blkd name=blk0,socket=run/axi-bus.sock,image=run/blk0.img,readonly=false,ram_access=qemu-mediated
 ```
 
 The backend listens on:
@@ -159,22 +157,28 @@ run/axi-bus.sock
 
 ## Run Frontend VM
 
-In a separate terminal, launch the VM:
+Launch the VM and its configured backends:
 
 ```sh
-nix run .#runvm -- configs/qemu-vms/axi-bus.toml
+nix run .#runvm -- configs/axi-bus.toml
 ```
 
 Inspect the generated QEMU command without launching:
 
 ```sh
-nix run .#runvm -- configs/qemu-vms/axi-bus.toml --dry-run
+nix run .#runvm -- --dry-run configs/axi-bus.toml
 ```
 
 Pass extra QEMU arguments after `--`:
 
 ```sh
-nix run .#runvm -- configs/qemu-vms/axi-bus.toml -- -serial mon:stdio
+nix run .#runvm -- configs/axi-bus.toml -- -serial mon:stdio
+```
+
+Launch only QEMU and assume backend sockets are already served manually:
+
+```sh
+nix run .#runvm -- --no-backend configs/axi-bus.toml
 ```
 
 ## QEMU Machine Setup
@@ -230,8 +234,7 @@ tests/run-tests.sh
 The test:
 
 - creates `run/blk0.img`
-- starts `blkd`
-- starts `cond` for the second virtio-console MMIO window
+- launches `blkd` and `cond` through `scripts/chiplets-launcher.py`
 - boots the frontend VM
 - waits for `/dev/vda`
 - writes one 512-byte sector
@@ -256,8 +259,7 @@ Run the dd benchmark:
 tests/run-benchmark.sh
 ```
 
-The benchmark also starts `cond` because the VM config includes the console MMIO
-window. Override the console backend with `CONSOLE_BACKEND_BIN=...` if needed.
+The benchmark launches the configured backends through `scripts/chiplets-launcher.py`.
 
 Defaults:
 
@@ -265,7 +267,6 @@ Defaults:
 BENCH_SIZE_MB=16
 BENCH_BS=64K
 BENCH_GUEST_TIMEOUT=180
-BENCH_BACKEND_TIMEOUT=220
 ```
 
 Example with custom size and block size:

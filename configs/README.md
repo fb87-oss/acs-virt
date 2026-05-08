@@ -3,20 +3,14 @@
 This directory contains hand-written runtime configs for the MMIO-only bring-up
 path.
 
-```text
-qemu-vms/   frontend QEMU VM configs
-backends/   external userspace backend configs
-```
-
-There is one frontend/backend pair:
+There is one runtime config:
 
 ```text
-qemu-vms/axi-bus.toml     frontend QEMU config
-backends/axi-bus.toml     block backend config
-backends/axi-console.toml console backend config
+axi-bus.toml     QEMU frontend plus block and console backend config
 ```
 
-The socket path must match between those two files.
+Socket paths live in the `qemu` target's nested `[[targets.qemu.devices]]` entries.
+The launcher passes them to QEMU and to backend daemons.
 
 The current backend uses `qemu-mediated` RAM access: the C backend asks QEMU
 to perform guest DMA reads and writes over the proxy protocol. `shared-mem` is
