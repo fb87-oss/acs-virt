@@ -9,10 +9,9 @@
   outputs = { self, nixpkgs }:
   let
     pkgs = import nixpkgs { system = "x86_64-linux"; };
-    kernel = pkgs.linuxPackages_latest.kernel;
-    moduleDir = "lib/modules/${kernel.modDirVersion}/kernel";
+    pkgsArm64 = import nixpkgs { system = "aarch64-linux"; };
 
-    initrc = pkgs.writeScript "initrc" ''
+    build-initrc = modules: pkgs.writeScript "make-initrc" ''
       #!/bin/sh
       
       mount -t proc none /proc
@@ -24,59 +23,51 @@
       # populate the device node
       mdev -s
 
-      insmod /${moduleDir}/drivers/virtio/virtio_ring.ko 2>/dev/null || true
-      insmod /${moduleDir}/drivers/virtio/virtio.ko 2>/dev/null || true
-      insmod /${moduleDir}/drivers/virtio/virtio_pci_modern_dev.ko 2>/dev/null || true
-      insmod /${moduleDir}/drivers/virtio/virtio_pci_legacy_dev.ko 2>/dev/null || true
-      insmod /${moduleDir}/drivers/virtio/virtio_pci.ko 2>/dev/null || true
-      virtio_mmio_params=""
-      for arg in $(cat /proc/cmdline); do
-        case "$arg" in
-          virtio_mmio.device=*)
-            virtio_mmio_params="$virtio_mmio_params device=''${arg#virtio_mmio.device=}"
-            ;;
-        esac
+      # load all modules once
+      for i in /modules.txt; do
+        insmod $i 2>/dev/null || true
       done
-      insmod /${moduleDir}/drivers/virtio/virtio_mmio.ko $virtio_mmio_params 2>/dev/null || true
-      insmod /${moduleDir}/drivers/block/virtio_blk.ko 2>/dev/null || true
-      insmod /${moduleDir}/drivers/char/virtio_console.ko 2>/dev/null || true
+
       mdev -s
     '';
 
-    initrd = pkgs.runCommand "make-initrd" {
+    build-initrd = kernel: busybox: modules: pkgs.runCommand "make-initrd" {
       buildInputs = with pkgs; [ cpio rsync xz ];
     } ''
+      set -x
+
       # filesystem skeleton
       mkdir -p initrd/{dev,sys,proc,bin,sbin,etc/init.d}
 
       # copy initrd scripts
-      cp -rf ${initrc} initrd/etc/init.d/rcS
-      rsync -av ${pkgs.pkgsStatic.busybox}/* initrd/
+      cp -rf ${build-initrc modules} initrd/etc/init.d/rcS
+      rsync -av ${busybox}/* initrd/
 
+      # copy all the virtio kernel modules
+      root="$PWD/initrd"
       copy_module() {
-        src=${kernel.modules}/$1.xz
-        dst=initrd/$1
+        dst=$root/initrd/$1
         mkdir -p "$(dirname "$dst")"
-        xz -dc "$src" > "$dst"
+        cp -f $1 $dst
+        echo "$i" >> $root/modules.txt
       }
 
-      copy_module ${moduleDir}/drivers/virtio/virtio.ko
-      copy_module ${moduleDir}/drivers/virtio/virtio_ring.ko
-      copy_module ${moduleDir}/drivers/virtio/virtio_pci_modern_dev.ko
-      copy_module ${moduleDir}/drivers/virtio/virtio_pci_legacy_dev.ko
-      copy_module ${moduleDir}/drivers/virtio/virtio_pci.ko
-      copy_module ${moduleDir}/drivers/virtio/virtio_mmio.ko
-      copy_module ${moduleDir}/drivers/block/virtio_blk.ko
-      copy_module ${moduleDir}/drivers/char/virtio_console.ko
+      ( cd ${kernel.modules}/${modules};
+        for i in $(find . -name "virtio*.ko.xz"); do
+          copy_module "$i"
+        done
+      )
 
       (cd initrd; find . -print0 | \
                     cpio --null -ov --owner=0:0 --format=newc | \
                     gzip -9 > $out)
     '';
 
-    runvm = pkgs.writeShellScriptBin "runvm" ''
+    runvm = kernel: busybox: pkgs.writeShellScriptBin "runvm" ''
+      set -x
+
       if [ "$#" -lt 1 ]; then
-      echo "usage: runvm [--dry-run] [--no-backend] <configs/*.toml> [-- <qemu-args>...]" >&2
+      echo "usage: runvm [--dry-run] [--no-backend] <samples/*.toml> [-- <qemu-args>...]" >&2
         exit 2
       fi
 
@@ -84,16 +75,26 @@
         "$PWD/scripts/build-tools.sh"
       fi
 
+      kernel_image=${kernel}/Image
+      [ -f "$kernel_image" ] || kernel_image=${kernel}/bzImage
       exec ${pkgs.python3}/bin/python3 "$PWD/scripts/chiplets-launcher.py" \
-        --kernel ${kernel}/bzImage \
-        --initrd ${initrd} \
+        --kernel $kernel_image \
+        --initrd ${build-initrd kernel busybox
+                    "lib/modules/${kernel.modDirVersion}/kernel" } \
         "$@"
     '';
+
+    runvm-x64 = runvm pkgs.linuxPackages_latest.kernel pkgs.pkgsStatic.busybox;
+    runvm-a64 = runvm pkgsArm64.linuxPackages_latest.kernel pkgsArm64.pkgsStatic.busybox;
   in
   {
 
-    packages.x86_64-linux.default = runvm;
-    packages.x86_64-linux.runvm = runvm;
+    packages.x86_64-linux.x64 = runvm-x64;
+    packages.x86_64-linux.a64 = runvm-a64;
+    packages.x86_64-linux.runvm-x64 = runvm-x64;
+    packages.x86_64-linux.runvm-a64 = runvm-a64;
+
+    packages.x86_64-linux.default = runvm-x64;
 
   };
 }

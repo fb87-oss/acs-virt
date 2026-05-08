@@ -5,6 +5,10 @@ This patch adds the custom QEMU `axi-bus` sysbus device.
 It modifies:
 
 ```text
+configs/devices/aarch64-softmmu/virt-axi.mak
+hw/arm/virt.c
+hw/core/sysbus-fdt.c
+hw/cxl/cxl-host-stubs.c
 hw/misc/Kconfig
 hw/misc/meson.build
 ```
@@ -31,7 +35,7 @@ The device accepts these properties:
 ```text
 base=<guest physical MMIO base>
 size=<MMIO window size>
-irq=<QEMU/x86 GSI number>
+irq=<x86 GSI number or ARM GIC SPI number>
 socket=<Unix socket path>
 ram-access=<shared-mem|qemu-mediated>
 target=<backend target name>
@@ -46,6 +50,9 @@ The current launcher emits a device like:
 
 For `microvm`, `irq` must be inside the project-reserved `axi-bus` range,
 `16..23`, and the machine must have `ioapic2=on`.
+
+For AArch64 `virt`, the device maps the MMIO window, wires the configured GIC
+SPI, and adds a `virtio,mmio` FDT node for guest discovery.
 
 ## Protocol
 
@@ -76,8 +83,8 @@ The device owns:
 - registering the guest MMIO window
 - forwarding MMIO reads and writes over the socket
 - mediating guest RAM reads and writes in `qemu-mediated` mode
-- asserting the configured x86 GSI when the backend sends `IRQ_ASSERT`
-- deasserting the configured x86 GSI when the backend sends `IRQ_DEASSERT`
+- asserting the configured x86 GSI or ARM SPI when the backend sends `IRQ_ASSERT`
+- deasserting the configured x86 GSI or ARM SPI when the backend sends `IRQ_DEASSERT`
 
 ## Backend Responsibilities
 

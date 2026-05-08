@@ -2,19 +2,66 @@ diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
 index 80c8a6a58d..f83ef340cc 100644
 --- a/hw/misc/Kconfig
 +++ b/hw/misc/Kconfig
-@@ -1,3 +1,6 @@
+@@ -1,3 +1,7 @@
 +config AXI_BUS
 +    bool
++    default y
 +
  config APPLESMC
      bool
      depends on ISA_BUS
+diff --git a/configs/devices/aarch64-softmmu/virt-axi.mak b/configs/devices/aarch64-softmmu/virt-axi.mak
+new file mode 100644
+index 0000000000..93ad1976cb
+--- /dev/null
++++ b/configs/devices/aarch64-softmmu/virt-axi.mak
+@@ -0,0 +1,2 @@
++CONFIG_ARM_VIRT=y
++CONFIG_AXI_BUS=y
+diff --git a/hw/cxl/cxl-host-stubs.c b/hw/cxl/cxl-host-stubs.c
+index f394d8e572..a08746bcb2 100644
+--- a/hw/cxl/cxl-host-stubs.c
++++ b/hw/cxl/cxl-host-stubs.c
+@@ -16,5 +16,10 @@ hwaddr cxl_fmws_set_memmap(hwaddr base, hwaddr max_addr)
+     return base;
+ };
+ void cxl_fmws_update_mmio(void) {};
+ 
++GSList *cxl_fmws_get_all_sorted(void)
++{
++    return NULL;
++}
++
+ const MemoryRegionOps cfmws_ops;
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 7f0023c65a..eeb05a80da 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -3302,6 +3302,7 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_UEFI_VARS_SYSBUS);
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_ARM_SMMUV3);
++    machine_class_allow_dynamic_sysbus_dev(mc, "axi-bus");
+ #ifdef CONFIG_TPM
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_TPM_TIS_SYSBUS);
+ #endif
+diff --git a/hw/core/sysbus-fdt.c b/hw/core/sysbus-fdt.c
+index c4a7da3707..db77711318 100644
+--- a/hw/core/sysbus-fdt.c
++++ b/hw/core/sysbus-fdt.c
+@@ -140,4 +140,5 @@ static const BindingEntry bindings[] = {
+     TYPE_BINDING(TYPE_ARM_SMMUV3, no_fdt_node),
+     TYPE_BINDING(TYPE_RAMFB_DEVICE, no_fdt_node),
+     TYPE_BINDING(TYPE_UEFI_VARS_SYSBUS, add_uefi_vars_node),
++    TYPE_BINDING("axi-bus", no_fdt_node),
+     TYPE_BINDING("", NULL), /* last element */
+ };
 diff --git a/hw/misc/axi-bus.c b/hw/misc/axi-bus.c
 new file mode 100644
 index 0000000000..14521bdf7f
 --- /dev/null
 +++ b/hw/misc/axi-bus.c
-@@ -0,0 +1,439 @@
+@@ -0,0 +1,504 @@
 +/*
 + * AXI bus proxy device.
 + *
@@ -26,7 +73,10 @@ index 0000000000..14521bdf7f
 +#include "qemu/osdep.h"
 +#include "qapi/error.h"
 +#include "system/address-spaces.h"
++#include "system/device_tree.h"
 +#include "system/memory.h"
++#include "hw/arm/fdt.h"
++#include "hw/arm/virt.h"
 +#include "hw/i386/microvm.h"
 +#include "hw/i386/x86.h"
 +#include "hw/irq.h"
@@ -364,10 +414,79 @@ index 0000000000..14521bdf7f
 +    return false;
 +}
 +
++static bool axi_bus_realize_x86(AxiBusState *s, Error **errp)
++{
++    Object *machine = qdev_get_machine();
++    X86MachineState *x86ms;
++
++    if (!object_dynamic_cast(machine, TYPE_X86_MACHINE)) {
++        return false;
++    }
++
++    x86ms = X86_MACHINE(machine);
++    if (!x86ms->ioapic2) {
++        error_setg(errp, "axi-bus requires microvm ioapic2=on");
++        return true;
++    }
++
++    if (s->irq_num < MICROVM_AXI_BUS_IRQ_BASE ||
++        s->irq_num >= MICROVM_AXI_BUS_IRQ_BASE + MICROVM_AXI_BUS_IRQ_COUNT) {
++        error_setg(errp, "axi-bus irq %u outside reserved range %u..%u",
++                   s->irq_num,
++                   MICROVM_AXI_BUS_IRQ_BASE,
++                   MICROVM_AXI_BUS_IRQ_BASE + MICROVM_AXI_BUS_IRQ_COUNT - 1);
++        return true;
++    }
++
++    if (x86ms->gsi && s->irq_num < 256) {
++        s->irq = x86ms->gsi[s->irq_num];
++    }
++    return true;
++}
++
++static void axi_bus_add_virt_fdt_node(VirtMachineState *vms, AxiBusState *s)
++{
++    MachineState *ms = MACHINE(vms);
++    g_autofree char *nodename = NULL;
++
++    if (!ms->fdt) {
++        return;
++    }
++
++    nodename = g_strdup_printf("/virtio_mmio@%" PRIx64, s->base);
++    qemu_fdt_add_subnode(ms->fdt, nodename);
++    qemu_fdt_setprop_string(ms->fdt, nodename, "compatible", "virtio,mmio");
++    qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg",
++                                 2, s->base, 2, s->size);
++    qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupts",
++                           GIC_FDT_IRQ_TYPE_SPI, s->irq_num,
++                           GIC_FDT_IRQ_FLAGS_EDGE_LO_HI);
++    qemu_fdt_setprop(ms->fdt, nodename, "dma-coherent", NULL, 0);
++}
++
++static bool axi_bus_realize_arm_virt(AxiBusState *s, Error **errp)
++{
++    Object *machine = qdev_get_machine();
++    VirtMachineState *vms;
++
++    if (!object_dynamic_cast(machine, TYPE_VIRT_MACHINE)) {
++        return false;
++    }
++
++    vms = VIRT_MACHINE(machine);
++    if (s->irq_num >= 256) {
++        error_setg(errp, "axi-bus irq %u outside supported GIC SPI range", s->irq_num);
++        return true;
++    }
++
++    s->irq = qdev_get_gpio_in(vms->gic, s->irq_num);
++    axi_bus_add_virt_fdt_node(vms, s);
++    return true;
++}
++
 +static void axi_bus_realize(DeviceState *dev, Error **errp)
 +{
 +    AxiBusState *s = AXI_BUS(dev);
-+    X86MachineState *x86ms = X86_MACHINE(qdev_get_machine());
 +    s->sockfd = -1;
 +
 +    if (!s->base) {
@@ -389,26 +508,19 @@ index 0000000000..14521bdf7f
 +        return;
 +    }
 +
-+    if (!x86ms->ioapic2) {
-+        error_setg(errp, "axi-bus requires microvm ioapic2=on");
++    if (!axi_bus_realize_x86(s, errp) &&
++        !axi_bus_realize_arm_virt(s, errp)) {
++        error_setg(errp, "axi-bus is only supported on x86 microvm and ARM virt machines");
 +        return;
 +    }
 +
-+    if (s->irq_num < MICROVM_AXI_BUS_IRQ_BASE ||
-+        s->irq_num >= MICROVM_AXI_BUS_IRQ_BASE + MICROVM_AXI_BUS_IRQ_COUNT) {
-+        error_setg(errp, "axi-bus irq %u outside reserved range %u..%u",
-+                   s->irq_num,
-+                   MICROVM_AXI_BUS_IRQ_BASE,
-+                   MICROVM_AXI_BUS_IRQ_BASE + MICROVM_AXI_BUS_IRQ_COUNT - 1);
++    if (*errp) {
 +        return;
 +    }
 +
 +    memory_region_init_io(&s->mmio, OBJECT(dev), &axi_bus_ops, s,
 +                          TYPE_AXI_BUS, s->size);
 +    memory_region_add_subregion(get_system_memory(), s->base, &s->mmio);
-+    if (x86ms->gsi && s->irq_num < 256) {
-+        s->irq = x86ms->gsi[s->irq_num];
-+    }
 +
 +    warn_report("%s: mapped 0x%" PRIx64 " bytes at 0x%" PRIx64
 +                ", irq=%u, socket=%s, ram-access=%s, target=%s; "

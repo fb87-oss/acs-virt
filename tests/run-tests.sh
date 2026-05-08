@@ -15,7 +15,7 @@ set +e
   printf 'ls -l /dev/hvc0\n'
   printf 'printf "cond-smoke-test\\n" > /dev/hvc0\n'
   printf 'sync\n'
-) | timeout 25 nix run .#runvm -- configs/axi-bus.toml \
+) | timeout 25 nix run .#runvm-x64 -- samples/axi-bus-x64.toml \
   > run/axi-bus-guest.log 2>&1
 guest_status=$?
 set -e

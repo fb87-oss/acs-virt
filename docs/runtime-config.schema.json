@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chiplets.local/schemas/runtime-config.schema.json",
+  "title": "chiplets axi-bus runtime config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["devices", "targets"],
+  "properties": {
+    "ram_access": {
+      "type": "string",
+      "enum": ["qemu-mediated", "shared-mem"],
+      "default": "shared-mem"
+    },
+    "devices": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/device" }
+    },
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["qemu"],
+      "properties": {
+        "qemu": { "$ref": "#/$defs/qemuTarget" }
+      }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "intLiteral": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "string", "pattern": "^(0x[0-9a-fA-F]+|[0-9]+)$" }
+      ]
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "mmio"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "type": {
+          "type": "string",
+          "enum": ["virtio-blk", "virtio-console"]
+        },
+        "mmio": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["base", "size", "irq"],
+          "properties": {
+            "base": { "$ref": "#/$defs/intLiteral" },
+            "size": { "$ref": "#/$defs/intLiteral" },
+            "irq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          }
+        }
+      }
+    },
+    "qemuTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "binary", "parameters", "devices"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["microvm", "virt"]
+        },
+        "binary": { "$ref": "#/$defs/path" },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "memory": {
+              "type": "string",
+              "default": "512M"
+            },
+            "kvm": {
+              "type": "boolean",
+              "default": true
+            },
+            "pcie": {
+              "type": "boolean",
+              "const": false,
+              "default": false
+            },
+            "cpu": {
+              "type": "string"
+            },
+            "append": {
+              "type": "string"
+            }
+          }
+        },
+        "devices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/qemuDevice" }
+        }
+      }
+    },
+    "qemuDevice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "socket"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "socket": { "$ref": "#/$defs/path" },
+        "log": { "$ref": "#/$defs/path" },
+        "image": { "$ref": "#/$defs/path" },
+        "readonly": {
+          "type": "boolean",
+          "default": false
+        },
+        "output": { "$ref": "#/$defs/path" }
+      }
+    }
+  }
+}

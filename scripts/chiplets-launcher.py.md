@@ -1,6 +1,6 @@
 # chiplets-launcher.py
 
-Python launcher for the merged `configs/axi-bus.toml` runtime config.
+Python launcher for runtime configs such as `samples/axi-bus-x64.toml`.
 
 It reads top-level `ram_access`, the `[targets.qemu]` target, each enabled
 `[[targets.qemu.devices]]` entry, and the matching `[[devices]]` entry's

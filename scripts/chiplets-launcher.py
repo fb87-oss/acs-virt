@@ -44,7 +44,7 @@ def validate_qemu_data_dir(qemu_args: list[str]) -> None:
         return
     data_dir = Path(qemu_args[qemu_args.index("-L") + 1])
     if not data_dir.is_dir():
-        raise FileNotFoundError(f"QEMU data dir not found: {data_dir}. Run scripts/build-qemu-x64.sh first.")
+        raise FileNotFoundError(f"QEMU data dir not found: {data_dir}. Build the configured QEMU target first.")
 
 
 def parse_int_literal(value: str) -> int:
@@ -58,8 +58,9 @@ def load_config(path: Path) -> dict:
 
 def validate(config: dict, qemu: dict) -> None:
     parameters = qemu.get("parameters", {})
-    if qemu.get("type", "microvm") != "microvm":
-        raise ValueError('only [targets.qemu] type = "microvm" is supported')
+    machine_type = qemu.get("type", "microvm")
+    if machine_type not in ("microvm", "virt"):
+        raise ValueError('only [targets.qemu] type = "microvm" or "virt" is supported')
     if parameters.get("pcie", False):
         raise ValueError("PCIe is not supported for this MMIO-only platform")
     if config.get("ram_access", "shared-mem") not in ("shared-mem", "qemu-mediated"):
@@ -151,6 +152,7 @@ def build_qemu_args(workspace: Path, config: dict, kernel: str, initrd: str, ext
     validate_windows(windows)
 
     parameters = qemu.get("parameters", {})
+    machine_type = qemu.get("type", "microvm")
     memory = parameters.get("memory", "512M")
     pcie = "on" if parameters.get("pcie", False) else "off"
     ram_access = config.get("ram_access", "shared-mem")
@@ -159,12 +161,28 @@ def build_qemu_args(workspace: Path, config: dict, kernel: str, initrd: str, ext
     kernel_path = resolve(workspace, kernel)
     initrd_path = resolve(workspace, initrd)
 
+    machine_args = []
+    if machine_type == "microvm":
+        machine_args = [
+            "-machine",
+            f"microvm,pcie={pcie},ioapic2=on,virtio-mmio-transports=0,memory-backend=guestmem",
+            "-append",
+            parameters.get("append", "console=ttyS0 root=/dev/ram0 rdinit=/linuxrc loglevel=8"),
+        ]
+    elif machine_type == "virt":
+        machine_args = [
+            "-machine",
+            "virt,highmem-mmio=on,highmem-mmio-size=1T,gic-version=3,acpi=off,memory-backend=guestmem",
+            "-cpu",
+            parameters.get("cpu", "max"),
+            "-append",
+            parameters.get("append", "console=ttyAMA0 root=/dev/ram0 rdinit=/linuxrc loglevel=8"),
+        ]
+
     args = [
         str(qemu_bin),
         "-object",
         f"memory-backend-memfd,id=guestmem,size={memory},share=on",
-        "-machine",
-        f"microvm,pcie={pcie},ioapic2=on,virtio-mmio-transports=0,memory-backend=guestmem",
         "-m",
         memory,
         "-nographic",
@@ -172,9 +190,8 @@ def build_qemu_args(workspace: Path, config: dict, kernel: str, initrd: str, ext
         str(kernel_path),
         "-initrd",
         str(initrd_path),
-        "-append",
-        "console=ttyS0 root=/dev/ram0 rdinit=/linuxrc loglevel=8",
     ]
+    args[3:3] = machine_args
 
     if data_dir is not None:
         args[1:1] = ["-L", str(data_dir)]
@@ -263,7 +280,7 @@ def main() -> int:
             if not os.access(command[0], os.X_OK):
                 raise FileNotFoundError(f"backend binary not found: {command[0]}. Run scripts/build-tools.sh first.")
         if not os.access(qemu_bin, os.X_OK):
-            raise FileNotFoundError(f"QEMU binary not found: {qemu_bin}. Run scripts/build-qemu-x64.sh first.")
+            raise FileNotFoundError(f"QEMU binary not found: {qemu_bin}. Build the configured QEMU target first.")
         validate_qemu_data_dir(qemu_args)
         processes = []
         logs = []

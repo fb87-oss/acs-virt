@@ -46,7 +46,7 @@ set +e
   printf 'echo READ_BENCH_START\n'
   printf 'dd if=/dev/vda of=/dev/null bs=%s count=%s 2>&1\n' "$bs" "$count"
   printf 'echo READ_BENCH_END\n'
-) | timeout "$guest_timeout" nix run .#runvm -- configs/axi-bus.toml \
+) | timeout "$guest_timeout" nix run .#runvm-x64 -- samples/axi-bus-x64.toml \
   > "$guest_log" 2>&1
 guest_status=$?
 set -e

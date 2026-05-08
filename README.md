@@ -38,7 +38,8 @@ backends own virtio-mmio register models, virtqueue processing, and endpoint I/O
 - Keep runtime configuration TOML-driven.
 - The Python launcher owns backend lifecycle by default; use `--no-backend` for
   manual backend launches.
-- Use `configs/axi-bus.toml` for the frontend VM and backend launch parameters.
+- Use `samples/axi-bus-x64.toml` and `samples/axi-bus-a64.toml` as sample
+  frontend VM and backend launch configs.
 - Use `run/axi-bus.sock` as the frontend/backend socket.
 - Use `run/axi-console.sock` as the frontend/console-backend socket.
 - Use `run/blk0.img` as the block image.
@@ -54,10 +55,15 @@ CMakeLists.txt                                C tools/tests and QEMU fetch targe
 flake.nix                                      Nix run wrapper and initrd setup
 scripts/build-tools.sh                        CMake build for local C tools/tests
 scripts/build-qemu-x64.sh                     CMake-backed minimal QEMU build script
+scripts/build-qemu-arm64.sh                   CMake-backed AArch64 QEMU build script
 scripts/chiplets-launcher.py                  TOML orchestrator and QEMU launcher
 tests/run-tests.sh                            end-to-end smoke test
 tests/run-benchmark.sh                        dd throughput benchmark
-configs/axi-bus.toml                          combined frontend/backend config
+samples/axi-bus-x64.toml                      x86_64 sample frontend/backend config
+samples/axi-bus-a64.toml                      AArch64 sample frontend/backend config
+docs/runtime-config.md                        config schema and authoring guide
+docs/runtime-config.schema.json               machine-readable runtime schema
+docs/qemu-target-toolchains.md                QEMU target file guide
 src/bin/blkd.c                                C blkd main/config entry point
 src/bin/blkd-axi.c                            C axi-bus socket transport
 src/bin/blkd-virtio.c                         C virtio-mmio/virtio-blk device model
@@ -81,7 +87,8 @@ scripts/build-qemu-x64.sh
 The script:
 
 - re-enters a Nix shell with the required CMake and QEMU build tools
-- uses CMake `ExternalProject` to fetch QEMU
+- uses CMake `ExternalProject` to fetch the QEMU release tarball
+- selects the QEMU target file `cmake/qemu-targets/x64-minimal.cmake`
 - copies the fetched QEMU source to `build/qemu-src-x64-minimal`
 - applies `patches/qemu/*.patch`
 - uses `ccache`
@@ -160,25 +167,25 @@ run/axi-bus.sock
 Launch the VM and its configured backends:
 
 ```sh
-nix run .#runvm -- configs/axi-bus.toml
+nix run .#runvm-x64 -- samples/axi-bus-x64.toml
 ```
 
 Inspect the generated QEMU command without launching:
 
 ```sh
-nix run .#runvm -- --dry-run configs/axi-bus.toml
+nix run .#runvm-x64 -- --dry-run samples/axi-bus-x64.toml
 ```
 
 Pass extra QEMU arguments after `--`:
 
 ```sh
-nix run .#runvm -- configs/axi-bus.toml -- -serial mon:stdio
+nix run .#runvm-x64 -- samples/axi-bus-x64.toml -- -serial mon:stdio
 ```
 
 Launch only QEMU and assume backend sockets are already served manually:
 
 ```sh
-nix run .#runvm -- --no-backend configs/axi-bus.toml
+nix run .#runvm-x64 -- --no-backend samples/axi-bus-x64.toml
 ```
 
 ## QEMU Machine Setup

@@ -1,0 +1,9 @@
+set(CHIPLETS_QEMU_NAME qemu-arm64-default)
+set(CHIPLETS_QEMU_INSTALL_NAME qemu-arm64-default)
+set(CHIPLETS_QEMU_SOURCE_COPY_NAME qemu-src-arm64-default)
+set(CHIPLETS_QEMU_BUILD_NAME qemu-arm64-default)
+
+set(CHIPLETS_QEMU_SOFTMMU_TARGET aarch64-softmmu)
+set(CHIPLETS_QEMU_DEVICE_CONFIG_TARGET aarch64)
+set(CHIPLETS_QEMU_DEVICE_CONFIG virt-axi)
+set(CHIPLETS_QEMU_SYSTEM_BINARY qemu-system-aarch64)
