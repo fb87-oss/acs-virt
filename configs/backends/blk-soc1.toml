@@ -1,7 +1,0 @@
-[block]
-image = "run/soc1-disk.img"
-readonly = false
-
-[transport.qemu_mmio]
-socket = "run/soc1-mmio.sock"
-ram_access = "shared-mem"

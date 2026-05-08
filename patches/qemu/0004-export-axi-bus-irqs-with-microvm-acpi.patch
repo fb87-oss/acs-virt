@@ -1,0 +1,73 @@
+diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
+--- a/hw/i386/acpi-microvm.c
++++ b/hw/i386/acpi-microvm.c
+@@ -46,5 +46,24 @@
+ 
+ #include CONFIG_DEVICES
+ 
++static void axi_bus_acpi_dsdt_add(Aml *scope, hwaddr base, hwaddr size,
++                                  uint32_t irq, unsigned int index)
++{
++    Aml *dev = aml_device("VR%02u", index);
++    Aml *crs;
++
++    aml_append(dev, aml_name_decl("_HID", aml_string("LNRO0005")));
++    aml_append(dev, aml_name_decl("_UID", aml_int(index)));
++    aml_append(dev, aml_name_decl("_CCA", aml_int(1)));
++
++    crs = aml_resource_template();
++    aml_append(crs, aml_memory32_fixed(base, size, AML_READ_WRITE));
++    aml_append(crs,
++               aml_interrupt(AML_CONSUMER, AML_EDGE, AML_ACTIVE_HIGH,
++                             AML_EXCLUSIVE, &irq, 1));
++    aml_append(dev, aml_name_decl("_CRS", crs));
++    aml_append(scope, dev);
++}
++
+ static void acpi_dsdt_add_virtio(Aml *scope,
+                                  MicrovmMachineState *mms)
+@@ -51,6 +70,7 @@ static void acpi_dsdt_add_virtio(Aml *scope,
+ {
+     gchar *separator;
+     long int index;
++    unsigned int axi_irq;
+     BusState *bus;
+     BusChild *kid;
+ 
+@@ -81,6 +101,36 @@ static void acpi_dsdt_add_virtio(Aml *scope,
+             virtio_acpi_dsdt_add(scope, base, size, irq, index, 1);
+         }
+     }
++
++    for (axi_irq = MICROVM_AXI_BUS_IRQ_BASE;
++         axi_irq < MICROVM_AXI_BUS_IRQ_BASE + MICROVM_AXI_BUS_IRQ_COUNT;
++         axi_irq++) {
++        QTAILQ_FOREACH(kid, &bus->children, sibling) {
++            Object *obj = object_dynamic_cast(OBJECT(kid->child), "axi-bus");
++            g_autoptr(Error) err = NULL;
++            uint64_t base;
++            uint64_t size;
++            uint32_t irq;
++
++            if (!obj) {
++                continue;
++            }
++
++            irq = object_property_get_uint(obj, "irq", &err);
++            if (err || irq != axi_irq) {
++                continue;
++            }
++            base = object_property_get_uint(obj, "base", &err);
++            if (err) {
++                continue;
++            }
++            size = object_property_get_uint(obj, "size", &err);
++            if (err) {
++                continue;
++            }
++            axi_bus_acpi_dsdt_add(scope, base, size, irq, irq);
++        }
++    }
+ }
+ 
+ static void acpi_dsdt_add_xhci(Aml *scope, MicrovmMachineState *mms)

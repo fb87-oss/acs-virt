@@ -39,6 +39,7 @@
       done
       insmod /${moduleDir}/drivers/virtio/virtio_mmio.ko $virtio_mmio_params 2>/dev/null || true
       insmod /${moduleDir}/drivers/block/virtio_blk.ko 2>/dev/null || true
+      insmod /${moduleDir}/drivers/char/virtio_console.ko 2>/dev/null || true
       mdev -s
     '';
 
@@ -66,6 +67,7 @@
       copy_module ${moduleDir}/drivers/virtio/virtio_pci.ko
       copy_module ${moduleDir}/drivers/virtio/virtio_mmio.ko
       copy_module ${moduleDir}/drivers/block/virtio_blk.ko
+      copy_module ${moduleDir}/drivers/char/virtio_console.ko
 
       (cd initrd; find . -print0 | \
                     cpio --null -ov --owner=0:0 --format=newc | \
@@ -78,14 +80,14 @@
         exit 2
       fi
 
-      exec nix shell \
-        nixpkgs#cargo \
-        nixpkgs#gcc \
-        nixpkgs#rustc \
-        --command cargo run --quiet --manifest-path "$PWD/Cargo.toml" --bin qemu-launch -- \
-          --kernel ${kernel}/bzImage \
-          --initrd ${initrd} \
-          "$@"
+      if [ ! -x "$PWD/out/qemu-launch" ]; then
+        "$PWD/scripts/build-tools.sh"
+      fi
+
+      exec "$PWD/out/qemu-launch" \
+        --kernel ${kernel}/bzImage \
+        --initrd ${initrd} \
+        "$@"
     '';
   in
   {
