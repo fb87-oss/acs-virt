@@ -1,6 +1,6 @@
 # AXI Bus Protocol
 
-This protocol connects QEMU's `virt-axi` device to an external device
+This protocol connects QEMU's `axi` device to an external device
 model. QEMU does not implement virtio devices; it only forwards MMIO accesses,
 RAM access requests, and IRQ events.
 
@@ -46,7 +46,7 @@ ERROR           = 0xffff
 
 `IRQ_ASSERT` raises the configured interrupt line. `IRQ_DEASSERT` lowers it when
 the guest acknowledges the virtio-mmio interrupt. This matches the level-triggered
-microvm ACPI export for `virt-axi` devices.
+microvm ACPI export for `axi` devices.
 
 ## Boundary
 

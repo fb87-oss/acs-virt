@@ -1,4 +1,4 @@
-#include "virt-axi.h"
+#include "fabric.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -12,8 +12,20 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-/** @brief Wire-format virt-axi protocol header. */
-struct virt_axi_header {
+#define AXI_MSG_MMIO_READ 3
+#define AXI_MSG_MMIO_READ_REPLY 4
+#define AXI_MSG_MMIO_WRITE 5
+#define AXI_MSG_IRQ_ASSERT 6
+#define AXI_MSG_IRQ_DEASSERT 7
+#define AXI_MSG_DMA_READ 8
+#define AXI_MSG_DMA_READ_REPLY 9
+#define AXI_MSG_DMA_WRITE 10
+#define AXI_MSG_ERROR 0xffff
+
+#define AXI_HEADER_LEN 24
+
+/** @brief Wire-format AXI protocol header. */
+struct axi_header {
     uint16_t kind;
     uint16_t flags;
     uint32_t window_id;
@@ -119,14 +131,14 @@ static bool io_all(int fd, void *buf, size_t len, bool write_op) {
 }
 
 /**
- * @brief Reads and decodes one virt-axi protocol header from a socket.
+ * @brief Reads and decodes one AXI protocol header from a socket.
  *
  * @param fd Socket file descriptor.
  * @param h Output decoded header.
  * @return bool True on success, false on socket failure.
  */
-static bool read_header(int fd, struct virt_axi_header *h) {
-    uint8_t buf[VIRT_AXI_HEADER_LEN];
+static bool read_header(int fd, struct axi_header *h) {
+    uint8_t buf[AXI_HEADER_LEN];
     if (!io_all(fd, buf, sizeof(buf), false)) {
         return false;
     }
@@ -140,14 +152,14 @@ static bool read_header(int fd, struct virt_axi_header *h) {
 }
 
 /**
- * @brief Encodes and writes one virt-axi protocol header to a socket.
+ * @brief Encodes and writes one AXI protocol header to a socket.
  *
  * @param fd Socket file descriptor.
  * @param h Header to encode and write.
  * @return bool True on success, false on socket failure.
  */
-static bool write_header(int fd, const struct virt_axi_header *h) {
-    uint8_t buf[VIRT_AXI_HEADER_LEN] = {0};
+static bool write_header(int fd, const struct axi_header *h) {
+    uint8_t buf[AXI_HEADER_LEN] = {0};
     store_le16(buf, h->kind);
     store_le16(buf + 2, h->flags);
     store_le32(buf + 4, h->window_id);
@@ -165,12 +177,12 @@ static bool write_header(int fd, const struct virt_axi_header *h) {
  * @param value Device register value to return.
  * @return bool True on success, false on socket failure.
  */
-static bool write_read_reply(int fd, const struct virt_axi_header *request,
+static bool write_read_reply(int fd, const struct axi_header *request,
                              uint64_t value) {
     uint8_t bytes[8];
     uint32_t len = request->length < 8 ? request->length : 8;
-    struct virt_axi_header reply = {
-        .kind = VIRT_AXI_MSG_MMIO_READ_REPLY,
+    struct axi_header reply = {
+        .kind = AXI_MSG_MMIO_READ_REPLY,
         .flags = request->flags,
         .window_id = request->window_id,
         .offset = request->offset,
@@ -208,8 +220,8 @@ static bool read_value(int fd, uint32_t len, uint64_t *value) {
  * @param h Request header to validate.
  * @return bool True when the request is in range.
  */
-static bool access_in_range(const struct virt_axi_device *dev,
-                            const struct virt_axi_header *h) {
+static bool access_in_range(const struct fabric_device *dev,
+                            const struct axi_header *h) {
     return h->window_id == 0 && h->length <= 8 && h->offset >= dev->addr &&
            h->offset <= dev->addr + dev->size &&
            h->length <= dev->addr + dev->size - h->offset;
@@ -222,7 +234,7 @@ static bool access_in_range(const struct virt_axi_device *dev,
  * @param bus_addr Absolute guest bus address.
  * @return uint64_t Device-relative offset.
  */
-static uint64_t device_offset(const struct virt_axi_device *dev,
+static uint64_t device_offset(const struct fabric_device *dev,
                               uint64_t bus_addr) {
     return bus_addr - dev->addr;
 }
@@ -281,15 +293,15 @@ static bool ensure_parent_dir(const char *path) {
  * @return bool True on clean service completion, false on protocol or socket
  * failure.
  */
-static bool serve_connection(int fd, const struct virt_axi_device *dev) {
-    struct virt_axi_io io = {.fd = fd};
+static bool serve_connection(int fd, const struct fabric_device *dev) {
+    struct fabric_io io = {.fd = fd};
 
     if (dev->ops->connect) {
         dev->ops->connect(dev->opaque);
     }
 
     for (;;) {
-        struct virt_axi_header h;
+        struct axi_header h;
         if (!read_header(fd, &h)) {
             return false;
         }
@@ -301,7 +313,7 @@ static bool serve_connection(int fd, const struct virt_axi_device *dev) {
         }
 
         switch (h.kind) {
-        case VIRT_AXI_MSG_MMIO_READ: {
+        case AXI_MSG_MMIO_READ: {
             uint64_t offset = device_offset(dev, h.offset);
             uint64_t value = dev->ops->read(dev->opaque, offset, h.length);
             fprintf(stderr,
@@ -312,10 +324,10 @@ static bool serve_connection(int fd, const struct virt_axi_device *dev) {
             }
             break;
         }
-        case VIRT_AXI_MSG_MMIO_WRITE: {
+        case AXI_MSG_MMIO_WRITE: {
             uint64_t value;
-            struct virt_axi_header ack = {
-                .kind = VIRT_AXI_MSG_ERROR,
+            struct axi_header ack = {
+                .kind = AXI_MSG_ERROR,
                 .flags = 0,
                 .window_id = 0,
                 .offset = 0,
@@ -352,7 +364,7 @@ static bool serve_connection(int fd, const struct virt_axi_device *dev) {
  * @return bool True only if the server exits cleanly, false on setup or accept
  * failure.
  */
-static bool run_device(const struct virt_axi_device *dev) {
+static bool run_device(const struct fabric_device *dev) {
     int listen_fd;
     struct sockaddr_un addr;
 
@@ -365,7 +377,7 @@ static bool run_device(const struct virt_axi_device *dev) {
     unlink(dev->socket_path);
     listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listen_fd < 0) {
-        perror("virt-axi: socket");
+        perror("axi: socket");
         return false;
     }
 
@@ -381,20 +393,19 @@ static bool run_device(const struct virt_axi_device *dev) {
 
     if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
         listen(listen_fd, 8) < 0) {
-        perror("virt-axi: bind/listen");
+        perror("axi: bind/listen");
         close(listen_fd);
         return false;
     }
 
-    fprintf(stderr, "%s: serving virt-axi socket %s\n", dev->name,
-            dev->socket_path);
+    fprintf(stderr, "%s: serving AXI socket %s\n", dev->name, dev->socket_path);
     for (;;) {
         int client_fd = accept(listen_fd, NULL, NULL);
         if (client_fd < 0) {
             if (errno == EINTR) {
                 continue;
             }
-            perror("virt-axi: accept");
+            perror("axi: accept");
             close(listen_fd);
             return false;
         }
@@ -408,22 +419,21 @@ static bool run_device(const struct virt_axi_device *dev) {
 }
 
 /**
- * @brief Initializes an empty virt-axi fabric instance.
+ * @brief Initializes an empty AXI fabric instance.
  *
  * @param bus Fabric instance to initialize.
  */
-void virt_axi_init(struct virt_axi *bus) { bus->device_count = 0; }
+void fabric_init(struct fabric *bus) { bus->device_count = 0; }
 
 /**
- * @brief Registers a backend device with a virt-axi fabric instance.
+ * @brief Registers a backend device with an AXI fabric instance.
  *
  * @param bus Fabric instance that receives the device registration.
  * @param device Device descriptor to copy into the fabric instance.
  * @return bool True on success, false if registration is invalid or full.
  */
-bool virt_axi_register(struct virt_axi *bus,
-                       const struct virt_axi_device *device) {
-    if (bus->device_count >= VIRT_AXI_MAX_DEVICES || !device->ops ||
+bool fabric_register(struct fabric *bus, const struct fabric_device *device) {
+    if (bus->device_count >= FABRIC_MAX_DEVICES || !device->ops ||
         !device->ops->read || !device->ops->write) {
         return false;
     }
@@ -432,16 +442,15 @@ bool virt_axi_register(struct virt_axi *bus,
 }
 
 /**
- * @brief Runs the virt-axi socket loop for the registered device.
+ * @brief Runs the AXI socket loop for the registered device.
  *
  * @param bus Fabric instance containing exactly one registered device.
  * @return bool True if the server exits cleanly, false on setup or protocol
  * failure.
  */
-bool virt_axi_run(struct virt_axi *bus) {
+bool fabric_run(struct fabric *bus) {
     if (bus->device_count != 1) {
-        fprintf(stderr,
-                "virt-axi: expected exactly one registered device, got %u\n",
+        fprintf(stderr, "axi: expected exactly one registered device, got %u\n",
                 bus->device_count);
         return false;
     }
@@ -457,22 +466,22 @@ bool virt_axi_run(struct virt_axi *bus) {
  * @param data Output heap buffer containing the read bytes; caller frees it.
  * @return bool True on success, false on socket or protocol failure.
  */
-bool virt_axi_dma_read(struct virt_axi_io *io, uint64_t gpa, uint32_t len,
-                       uint8_t **data) {
-    struct virt_axi_header request = {
-        .kind = VIRT_AXI_MSG_DMA_READ,
+bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
+                     uint8_t **data) {
+    struct axi_header request = {
+        .kind = AXI_MSG_DMA_READ,
         .flags = 0,
         .window_id = 0,
         .offset = gpa,
         .length = len,
     };
-    struct virt_axi_header reply;
+    struct axi_header reply;
     uint8_t *buf = NULL;
 
     if (!write_header(io->fd, &request) || !read_header(io->fd, &reply)) {
         return false;
     }
-    if (reply.kind != VIRT_AXI_MSG_DMA_READ_REPLY || reply.length != len) {
+    if (reply.kind != AXI_MSG_DMA_READ_REPLY || reply.length != len) {
         return false;
     }
 
@@ -499,10 +508,9 @@ bool virt_axi_dma_read(struct virt_axi_io *io, uint64_t gpa, uint32_t len,
  * @param value Output decoded host-endian value.
  * @return bool True on success, false on socket or protocol failure.
  */
-bool virt_axi_dma_read_u16(struct virt_axi_io *io, uint64_t gpa,
-                           uint16_t *value) {
+bool fabric_dma_read_u16(struct fabric_io *io, uint64_t gpa, uint16_t *value) {
     uint8_t *data = NULL;
-    if (!virt_axi_dma_read(io, gpa, 2, &data)) {
+    if (!fabric_dma_read(io, gpa, 2, &data)) {
         return false;
     }
     *value = load_le16(data);
@@ -519,16 +527,16 @@ bool virt_axi_dma_read_u16(struct virt_axi_io *io, uint64_t gpa,
  * @param len Number of bytes to write.
  * @return bool True on success, false on socket or protocol failure.
  */
-bool virt_axi_dma_write(struct virt_axi_io *io, uint64_t gpa, const void *data,
-                        uint32_t len) {
-    struct virt_axi_header request = {
-        .kind = VIRT_AXI_MSG_DMA_WRITE,
+bool fabric_dma_write(struct fabric_io *io, uint64_t gpa, const void *data,
+                      uint32_t len) {
+    struct axi_header request = {
+        .kind = AXI_MSG_DMA_WRITE,
         .flags = 0,
         .window_id = 0,
         .offset = gpa,
         .length = len,
     };
-    struct virt_axi_header reply;
+    struct axi_header reply;
 
     if (!write_header(io->fd, &request)) {
         return false;
@@ -539,7 +547,7 @@ bool virt_axi_dma_write(struct virt_axi_io *io, uint64_t gpa, const void *data,
     if (!read_header(io->fd, &reply)) {
         return false;
     }
-    return reply.kind == VIRT_AXI_MSG_ERROR;
+    return reply.kind == AXI_MSG_ERROR;
 }
 
 /**
@@ -548,16 +556,16 @@ bool virt_axi_dma_write(struct virt_axi_io *io, uint64_t gpa, const void *data,
  * @param io Active fabric I/O context.
  * @return bool True on success, false on socket failure.
  */
-bool virt_axi_raise_irq(struct virt_axi_io *io) {
-    struct virt_axi_header irq = {
-        .kind = VIRT_AXI_MSG_IRQ_ASSERT,
+bool fabric_raise_irq(struct fabric_io *io) {
+    struct axi_header irq = {
+        .kind = AXI_MSG_IRQ_ASSERT,
         .flags = 0,
         .window_id = 0,
         .offset = 0,
         .length = 0,
     };
 
-    return virt_axi_lower_irq(io) && write_header(io->fd, &irq);
+    return fabric_lower_irq(io) && write_header(io->fd, &irq);
 }
 
 /**
@@ -566,9 +574,9 @@ bool virt_axi_raise_irq(struct virt_axi_io *io) {
  * @param io Active fabric I/O context.
  * @return bool True on success, false on socket failure.
  */
-bool virt_axi_lower_irq(struct virt_axi_io *io) {
-    struct virt_axi_header irq = {
-        .kind = VIRT_AXI_MSG_IRQ_DEASSERT,
+bool fabric_lower_irq(struct fabric_io *io) {
+    struct axi_header irq = {
+        .kind = AXI_MSG_IRQ_DEASSERT,
         .flags = 0,
         .window_id = 0,
         .offset = 0,

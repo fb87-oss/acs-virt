@@ -19,10 +19,10 @@ Main responsibilities:
 - provide little-endian helpers through `virtio.h`
 
 The DMA functions are injected by the fabric layer through callback pointers.
-Today those callbacks are `virt_axi_dma_read`, `virt_axi_dma_read_u16`, and
-`virt_axi_dma_write`, but this file only depends on the callback signatures from
-`virtio.h`. That keeps the virtio queue code reusable if another fabric, such as
-UIO or `/dev/mem`, is added later.
+Today those callbacks are `fabric_dma_read`, `fabric_dma_read_u16`, and
+`fabric_dma_write`, but this file only depends on the callback signatures from
+`virtio.h`. That keeps the virtio queue code reusable across the `axi` and
+`/dev/mem` fabrics.
 
 Descriptor processing is deliberately minimal. `virtio_read_desc` loads the raw
 16-byte split-ring descriptor. `virtio_next_avail` observes whether the driver
@@ -36,4 +36,4 @@ Device-specific behavior lives outside this file:
 - `src/drivers/virtio-blkd.c` interprets virtio-blk request headers and disk I/O
 - `src/drivers/virtio-consoled.c` interprets virtio-console TX/RX queues
 - `src/virtio-mmio.c` maps Linux virtio-mmio registers to `struct virtio_device`
-- `src/fabrics/virt-axi.c` moves MMIO, DMA, and IRQ messages over the QEMU socket
+- `src/fabrics/axi.c` moves MMIO, DMA, and IRQ messages over the QEMU socket

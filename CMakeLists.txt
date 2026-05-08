@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(chiplets_virt_axi C)
+project(chiplets_axi C)
 
 include(FetchContent)
 include(ExternalProject)
@@ -12,8 +12,18 @@ set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out)
 
 option(CHIPLETS_FETCH_QEMU "Fetch QEMU source and enable the configured QEMU target" OFF)
+set(CHIPLETS_BACKEND_FABRIC "axi" CACHE STRING "Backend fabric implementation: axi or devmem")
+set_property(CACHE CHIPLETS_BACKEND_FABRIC PROPERTY STRINGS axi devmem)
 set(CHIPLETS_QEMU_TARGET_FILE "${CMAKE_SOURCE_DIR}/cmake/qemu-targets/x64-minimal.cmake"
     CACHE FILEPATH "QEMU target configuration file")
+
+if(CHIPLETS_BACKEND_FABRIC STREQUAL "axi")
+  set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/axi.c)
+elseif(CHIPLETS_BACKEND_FABRIC STREQUAL "devmem")
+  set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/devmem.c)
+else()
+  message(FATAL_ERROR "CHIPLETS_BACKEND_FABRIC must be one of: axi, devmem")
+endif()
 
 FetchContent_Declare(
   ctest
@@ -41,11 +51,11 @@ add_library(virtio STATIC
 target_include_directories(virtio PUBLIC src)
 target_link_libraries(virtio PRIVATE project_warnings)
 
-add_library(virt_axi STATIC
-  src/fabrics/virt-axi.c
+add_library(fabric STATIC
+  ${CHIPLETS_BACKEND_FABRIC_SOURCE}
 )
-target_include_directories(virt_axi PUBLIC src src/fabrics)
-target_link_libraries(virt_axi PRIVATE project_warnings)
+target_include_directories(fabric PUBLIC src src/fabrics)
+target_link_libraries(fabric PRIVATE project_warnings)
 
 add_library(virtio_mmio STATIC
   src/virtio-mmio.c
@@ -57,13 +67,13 @@ add_executable(virtio-blkd
   src/drivers/virtio-blkd.c
 )
 target_link_libraries(virtio-blkd PRIVATE project_warnings)
-target_link_libraries(virtio-blkd PRIVATE virt_axi virtio_mmio virtio)
+target_link_libraries(virtio-blkd PRIVATE fabric virtio_mmio virtio)
 
 add_executable(virtio-consoled
   src/drivers/virtio-consoled.c
 )
 target_link_libraries(virtio-consoled PRIVATE project_warnings)
-target_link_libraries(virtio-consoled PRIVATE virt_axi virtio_mmio virtio)
+target_link_libraries(virtio-consoled PRIVATE fabric virtio_mmio virtio)
 
 add_executable(c-backend-tests
   tests/c-backend-tests.c
@@ -72,7 +82,7 @@ add_executable(c-backend-tests
 )
 target_include_directories(c-backend-tests PRIVATE src src/drivers src/fabrics)
 target_compile_definitions(c-backend-tests PRIVATE BACKEND_TEST)
-target_link_libraries(c-backend-tests PRIVATE project_warnings ctest_header virt_axi virtio_mmio virtio)
+target_link_libraries(c-backend-tests PRIVATE project_warnings ctest_header fabric virtio_mmio virtio)
 add_test(NAME c-backend-tests COMMAND c-backend-tests)
 
 install(TARGETS virtio-blkd virtio-consoled c-backend-tests RUNTIME DESTINATION bin)

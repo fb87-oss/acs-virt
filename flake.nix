@@ -13,7 +13,7 @@
 
     build-initrc = modules: pkgs.writeScript "make-initrc" ''
       #!/bin/sh
-      
+
       mount -t proc none /proc
       mount -t sysfs none /sys
 
@@ -23,9 +23,12 @@
       # populate the device node
       mdev -s
 
-      # load all modules once
-      for i in /modules.txt; do
-        insmod $i 2>/dev/null || true
+      # Some kernels build virtio pieces in; modular kernels may need dependency
+      # retries because this tiny initrd does not run full modprobe.
+      for pass in 1 2 3; do
+        while read -r i; do
+          [ -e "/$i" ] && insmod "/$i" 2>/dev/null || true
+        done < /modules.txt
       done
 
       mdev -s
@@ -34,8 +37,6 @@
     build-initrd = kernel: busybox: modules: pkgs.runCommand "make-initrd" {
       buildInputs = with pkgs; [ cpio rsync xz ];
     } ''
-      set -x
-
       # filesystem skeleton
       mkdir -p initrd/{dev,sys,proc,bin,sbin,etc/init.d}
 
@@ -46,10 +47,10 @@
       # copy all the virtio kernel modules
       root="$PWD/initrd"
       copy_module() {
-        dst=$root/initrd/$1
+        dst=$root/${modules}/''${1%.xz}
         mkdir -p "$(dirname "$dst")"
-        cp -f $1 $dst
-        echo "$i" >> $root/modules.txt
+        xz -dc "$1" > "$dst"
+        echo "${modules}/''${1%.xz}" >> $root/modules.txt
       }
 
       ( cd ${kernel.modules}/${modules};
@@ -58,6 +59,11 @@
         done
       )
 
+      # relocate all modules file
+      cp -f $(realpath ${kernel.modules}/${modules}/..)/modules.* \
+            $(realpath initrd/${modules}/../)
+
+      # pack everything
       (cd initrd; find . -print0 | \
                     cpio --null -ov --owner=0:0 --format=newc | \
                     gzip -9 > $out)
@@ -79,8 +85,7 @@
       [ -f "$kernel_image" ] || kernel_image=${kernel}/bzImage
       exec ${pkgs.python3}/bin/python3 "$PWD/scripts/chiplets-launcher.py" \
         --kernel $kernel_image \
-        --initrd ${build-initrd kernel busybox
-                    "lib/modules/${kernel.modDirVersion}/kernel" } \
+        --initrd ${build-initrd kernel busybox "lib/modules/${kernel.modDirVersion}/kernel" } \
         "$@"
     '';
 
@@ -89,11 +94,10 @@
   in
   {
 
-    packages.x86_64-linux.x64 = runvm-x64;
-    packages.x86_64-linux.a64 = runvm-a64;
     packages.x86_64-linux.runvm-x64 = runvm-x64;
     packages.x86_64-linux.runvm-a64 = runvm-a64;
-
+    packages.x86_64-linux.x64 = runvm-x64;
+    packages.x86_64-linux.a64 = runvm-a64;
     packages.x86_64-linux.default = runvm-x64;
 
   };

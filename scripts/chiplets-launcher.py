@@ -205,7 +205,7 @@ def build_qemu_args(workspace: Path, config: dict, kernel: str, initrd: str, ext
         args.extend(
             [
                 "-device",
-                "virt-axi,"
+                "axi,"
                 f"id={window['name']},"
                 f"base={window['base']},"
                 f"size={window['size']},"
@@ -222,6 +222,37 @@ def build_qemu_args(workspace: Path, config: dict, kernel: str, initrd: str, ext
 
 def print_command(label: str, command: list[str]) -> None:
     print(f"{label}: " + " ".join(shlex.quote(arg) for arg in command))
+
+
+def command_text(command: list[str]) -> str:
+    return " ".join(shlex.quote(arg) for arg in command)
+
+
+def write_start_scripts(workspace: Path, backend_commands: list[tuple[list[str], Path | None]], qemu_args: list[str]) -> None:
+    run_dir = workspace / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    srv_lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
+    if backend_commands:
+        for command, log_path in backend_commands:
+            line = command_text(command)
+            if log_path is not None:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                line += f" >> {shlex.quote(str(log_path))} 2>&1"
+            srv_lines.append(f"{line} &")
+        srv_lines.append("wait")
+    else:
+        srv_lines.append("# No backend commands configured.")
+
+    guest_lines = ["#!/usr/bin/env bash", "set -euo pipefail", "", f"exec {command_text(qemu_args)}"]
+
+    scripts = {
+        run_dir / "run-srv.sh": "\n".join(srv_lines) + "\n",
+        run_dir / "run-guest.sh": "\n".join(guest_lines) + "\n",
+    }
+    for path, text in scripts.items():
+        path.write_text(text)
+        path.chmod(0o755)
 
 
 def open_log(path: Path | None):
@@ -244,10 +275,7 @@ def terminate_processes(processes: list[subprocess.Popen]) -> None:
 
 
 def wait_for_sockets(commands: list[tuple[list[str], Path | None]], timeout: float = 5.0) -> None:
-    sockets = []
-    for command, _ in commands:
-        values = dict(part.split("=", 1) for part in command[1].split(","))
-        sockets.append(Path(values["socket"]))
+    sockets = backend_socket_paths(commands)
 
     deadline = time.monotonic() + timeout
     while True:
@@ -260,6 +288,14 @@ def wait_for_sockets(commands: list[tuple[list[str], Path | None]], timeout: flo
         time.sleep(0.05)
 
 
+def backend_socket_paths(commands: list[tuple[list[str], Path | None]]) -> list[Path]:
+    sockets = []
+    for command, _ in commands:
+        values = dict(part.split("=", 1) for part in command[1].split(","))
+        sockets.append(Path(values["socket"]))
+    return sockets
+
+
 def main() -> int:
     args = parse_args()
     workspace = Path.cwd()
@@ -270,6 +306,7 @@ def main() -> int:
             raise ValueError("missing [targets.qemu]")
         backend_commands = [] if args.no_backend else build_backend_commands(workspace, config, qemu)
         qemu_args = build_qemu_args(workspace, config, args.kernel, args.initrd, args.extra_qemu_args)
+        write_start_scripts(workspace, backend_commands, qemu_args)
         qemu_bin = Path(qemu_args[0])
         if args.dry_run:
             for command, _ in backend_commands:
@@ -285,6 +322,8 @@ def main() -> int:
         processes = []
         logs = []
         try:
+            for socket in backend_socket_paths(backend_commands):
+                socket.unlink(missing_ok=True)
             for command, log_path in backend_commands:
                 log = open_log(log_path)
                 logs.append(log)

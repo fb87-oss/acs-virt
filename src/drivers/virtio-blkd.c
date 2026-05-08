@@ -238,9 +238,8 @@ void blkd_virtio_init(struct blkd_virtio_device *dev,
  * @param used_len Output length to report in the used ring.
  * @return bool True on success, false on malformed descriptors or DMA failure.
  */
-static bool process_chain(struct blkd_virtio_device *dev,
-                          struct virt_axi_io *io, uint16_t head,
-                          uint32_t *used_len) {
+static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
+                          uint16_t head, uint32_t *used_len) {
     struct virtio_desc header_desc;
     struct virtio_desc status_desc;
     uint8_t *header = NULL;
@@ -254,10 +253,10 @@ static bool process_chain(struct blkd_virtio_device *dev,
 
     fprintf(stderr, "blkd: read descriptor chain head=%u\n", head);
 
-    if (!virtio_read_desc(&dev->queue, io, virt_axi_dma_read, head,
+    if (!virtio_read_desc(&dev->queue, io, fabric_dma_read, head,
                           &header_desc) ||
         !(header_desc.flags & VRING_DESC_F_NEXT) ||
-        !virt_axi_dma_read(io, header_desc.addr, 16, &header)) {
+        !fabric_dma_read(io, header_desc.addr, 16, &header)) {
         return false;
     }
 
@@ -284,8 +283,7 @@ static bool process_chain(struct blkd_virtio_device *dev,
         bool last;
 
         if (++chain_seen > dev->queue.num ||
-            !virtio_read_desc(&dev->queue, io, virt_axi_dma_read, index,
-                              &desc)) {
+            !virtio_read_desc(&dev->queue, io, fabric_dma_read, index, &desc)) {
             return false;
         }
 
@@ -303,7 +301,7 @@ static bool process_chain(struct blkd_virtio_device *dev,
                 if (!data ||
                     !blkd_block_read(dev->backend, offset + data_len, data,
                                      desc.len) ||
-                    !virt_axi_dma_write(io, desc.addr, data, desc.len)) {
+                    !fabric_dma_write(io, desc.addr, data, desc.len)) {
                     status = VIRTIO_BLK_S_IOERR;
                 }
                 free(data);
@@ -313,7 +311,7 @@ static bool process_chain(struct blkd_virtio_device *dev,
             if (desc.flags & VRING_DESC_F_WRITE) {
                 status = VIRTIO_BLK_S_IOERR;
             } else if (status == VIRTIO_BLK_S_OK) {
-                if (!virt_axi_dma_read(io, desc.addr, desc.len, &data)) {
+                if (!fabric_dma_read(io, desc.addr, desc.len, &data)) {
                     return false;
                 }
                 if (!blkd_block_write(dev->backend, offset + data_len, data,
@@ -337,7 +335,7 @@ static bool process_chain(struct blkd_virtio_device *dev,
             request_type, sector, data_len, status);
 
     *used_len = request_type == VIRTIO_BLK_T_IN ? data_len + 1 : 1;
-    return virt_axi_dma_write(io, status_desc.addr, &status, 1);
+    return fabric_dma_write(io, status_desc.addr, &status, 1);
 }
 
 /**
@@ -349,7 +347,7 @@ static bool process_chain(struct blkd_virtio_device *dev,
  * @return bool True on success, false on DMA or queue processing failure.
  */
 bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
-                              struct virt_axi_io *io, uint32_t queue) {
+                              struct fabric_io *io, uint32_t queue) {
     bool used_any = false;
 
     fprintf(stderr, "blkd: notify queue=%u\n", queue);
@@ -362,7 +360,7 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
         uint32_t used_len;
         bool available;
 
-        if (!virtio_next_avail(&dev->queue, io, virt_axi_dma_read_u16, &head,
+        if (!virtio_next_avail(&dev->queue, io, fabric_dma_read_u16, &head,
                                &available)) {
             return false;
         }
@@ -372,8 +370,8 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
 
         fprintf(stderr, "blkd: process head=%u\n", head);
         if (!process_chain(dev, io, head, &used_len) ||
-            !virtio_add_used(&dev->queue, io, virt_axi_dma_read_u16,
-                             virt_axi_dma_write, head, used_len)) {
+            !virtio_add_used(&dev->queue, io, fabric_dma_read_u16,
+                             fabric_dma_write, head, used_len)) {
             return false;
         }
         dev->queue.last_avail_idx++;
@@ -382,7 +380,7 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
 
     if (used_any) {
         dev->vdev.interrupt_status |= VIRTIO_INTERRUPT_VRING;
-        if (!virt_axi_raise_irq(io)) {
+        if (!fabric_raise_irq(io)) {
             return false;
         }
     }
@@ -390,8 +388,8 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
     return true;
 }
 
-/** @brief State binding virtio-blk, virtio-mmio, and virt-axi together. */
-struct blkd_virt_axi_binding {
+/** @brief State binding virtio-blk, virtio-mmio, and axi together. */
+struct blkd_fabric_binding {
     struct blkd_virtio_device *dev;
     struct blkd_block_backend *backend;
     struct virtio_mmio mmio;
@@ -400,50 +398,50 @@ struct blkd_virt_axi_binding {
 /**
  * @brief Initializes per-connection virtio-mmio state after QEMU connects.
  *
- * @param opaque Block virt-axi binding state.
+ * @param opaque Block fabric binding state.
  */
 static void blkd_connect(void *opaque) {
-    struct blkd_virt_axi_binding *binding = opaque;
+    struct blkd_fabric_binding *binding = opaque;
 
     blkd_virtio_init(binding->dev, binding->backend);
     virtio_mmio_init(&binding->mmio, &binding->dev->vdev);
 }
 
 /**
- * @brief Handles a virt-axi MMIO read for the block device.
+ * @brief Handles a fabric MMIO read for the block device.
  *
- * @param opaque Block virt-axi binding state.
+ * @param opaque Block fabric binding state.
  * @param offset Device-relative MMIO offset.
  * @param len Access width in bytes.
  * @return uint64_t Register value returned to QEMU.
  */
 static uint64_t blkd_mmio_read(void *opaque, uint64_t offset, uint32_t len) {
-    struct blkd_virt_axi_binding *binding = opaque;
+    struct blkd_fabric_binding *binding = opaque;
 
     return virtio_mmio_read(&binding->mmio, offset, len);
 }
 
 /**
- * @brief Handles a virt-axi MMIO write for the block device.
+ * @brief Handles a fabric MMIO write for the block device.
  *
- * @param opaque Block virt-axi binding state.
+ * @param opaque Block fabric binding state.
  * @param io Active fabric I/O context.
  * @param offset Device-relative MMIO offset.
  * @param raw_value Register value written by the guest.
  * @param len Access width in bytes.
  * @return bool True on success, false on notification or IRQ failure.
  */
-static bool blkd_mmio_write(void *opaque, struct virt_axi_io *io,
-                            uint64_t offset, uint64_t raw_value, uint32_t len) {
-    struct blkd_virt_axi_binding *binding = opaque;
+static bool blkd_mmio_write(void *opaque, struct fabric_io *io, uint64_t offset,
+                            uint64_t raw_value, uint32_t len) {
+    struct blkd_fabric_binding *binding = opaque;
 
     (void)len;
     virtio_mmio_write(&binding->mmio, offset, raw_value);
     if (offset == VIRTIO_MMIO_STATUS && raw_value == 0 &&
-        !virt_axi_lower_irq(io)) {
+        !fabric_lower_irq(io)) {
         return false;
     }
-    if (offset == VIRTIO_MMIO_INTERRUPT_ACK && !virt_axi_lower_irq(io)) {
+    if (offset == VIRTIO_MMIO_INTERRUPT_ACK && !fabric_lower_irq(io)) {
         return false;
     }
     if (offset == VIRTIO_MMIO_QUEUE_NOTIFY &&
@@ -455,19 +453,19 @@ static bool blkd_mmio_write(void *opaque, struct virt_axi_io *io,
 }
 
 /**
- * @brief Initializes a virt-axi MMIO device binding for virtio-blk.
+ * @brief Initializes a fabric MMIO device binding for virtio-blk.
  *
  * @param device Fabric device descriptor to populate.
  * @param dev virtio-blk device state.
  * @param backend Block backend used by the device.
  * @param socket_path Unix socket path for QEMU to connect to.
  */
-void blkd_virt_axi_init_device(struct virt_axi_device *device,
-                               struct blkd_virtio_device *dev,
-                               struct blkd_block_backend *backend,
-                               const char *socket_path) {
-    static struct blkd_virt_axi_binding binding;
-    static const struct virt_axi_device_ops ops = {
+void blkd_fabric_init_device(struct fabric_device *device,
+                             struct blkd_virtio_device *dev,
+                             struct blkd_block_backend *backend,
+                             const char *socket_path) {
+    static struct blkd_fabric_binding binding;
+    static const struct fabric_device_ops ops = {
         .connect = blkd_connect,
         .read = blkd_mmio_read,
         .write = blkd_mmio_write,
@@ -592,8 +590,8 @@ int main(int argc, char **argv) {
     struct blkd_config cfg;
     struct blkd_block_backend backend;
     struct blkd_virtio_device dev;
-    struct virt_axi_device virt_axi_device;
-    struct virt_axi bus;
+    struct fabric_device fabric_device;
+    struct fabric bus;
 
     if (argc != 2) {
         fprintf(stderr,
@@ -615,9 +613,9 @@ int main(int argc, char **argv) {
     fprintf(stderr, "blkd: serving %" PRIu64 " sectors on %s (%s)\n",
             backend.image_len / BLKD_SECTOR_SIZE, cfg.socket, cfg.ram_access);
 
-    virt_axi_init(&bus);
-    blkd_virt_axi_init_device(&virt_axi_device, &dev, &backend, cfg.socket);
-    if (!virt_axi_register(&bus, &virt_axi_device) || !virt_axi_run(&bus)) {
+    fabric_init(&bus);
+    blkd_fabric_init_device(&fabric_device, &dev, &backend, cfg.socket);
+    if (!fabric_register(&bus, &fabric_device) || !fabric_run(&bus)) {
         blkd_block_close(&backend);
         return 1;
     }

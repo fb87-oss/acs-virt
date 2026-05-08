@@ -5,7 +5,7 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
  
  #include CONFIG_DEVICES
  
-+static void virt_axi_acpi_dsdt_add(Aml *scope, hwaddr base, hwaddr size,
++static void axi_acpi_dsdt_add(Aml *scope, hwaddr base, hwaddr size,
 +                                  uint32_t irq, unsigned int index)
 +{
 +    Aml *dev = aml_device("VR%02u", index);
@@ -39,11 +39,11 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
          }
      }
 +
-+    for (axi_irq = MICROVM_VIRT_AXI_IRQ_BASE;
-+         axi_irq < MICROVM_VIRT_AXI_IRQ_BASE + MICROVM_VIRT_AXI_IRQ_COUNT;
++    for (axi_irq = MICROVM_AXI_IRQ_BASE;
++         axi_irq < MICROVM_AXI_IRQ_BASE + MICROVM_AXI_IRQ_COUNT;
 +         axi_irq++) {
 +        QTAILQ_FOREACH(kid, &bus->children, sibling) {
-+            Object *obj = object_dynamic_cast(OBJECT(kid->child), "virt-axi");
++            Object *obj = object_dynamic_cast(OBJECT(kid->child), "axi");
 +            g_autoptr(Error) err = NULL;
 +            uint64_t base;
 +            uint64_t size;
@@ -65,7 +65,7 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +            if (err) {
 +                continue;
 +            }
-+            virt_axi_acpi_dsdt_add(scope, base, size, irq, irq);
++            axi_acpi_dsdt_add(scope, base, size, irq, irq);
 +        }
 +    }
  }

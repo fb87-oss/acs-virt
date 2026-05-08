@@ -8,8 +8,8 @@ inventory in `[[devices]]` with target-specific enablement in
 The sample configs are:
 
 ```text
-samples/virt-axi-x64.toml  x86_64 microvm
-samples/virt-axi-a64.toml  AArch64 virt
+samples/axi-x64.toml  x86_64 microvm
+samples/axi-a64.toml  AArch64 virt
 ```
 
 The machine-readable schema for the TOML data model, expressed as JSON Schema for
@@ -96,8 +96,8 @@ Fields:
 
 Supported QEMU target types:
 
-- `microvm`: x86_64 microvm. Uses patched ACPI discovery for `virt-axi` devices.
-- `virt`: AArch64 virt. Uses generated FDT `virtio,mmio` discovery for `virt-axi`
+- `microvm`: x86_64 microvm. Uses patched ACPI discovery for `axi` devices.
+- `virt`: AArch64 virt. Uses generated FDT `virtio,mmio` discovery for `axi`
   devices.
 
 QEMU data files:
@@ -117,15 +117,15 @@ emitted on the QEMU command line and launched through backend daemons.
 ```toml
 [[targets.qemu.devices]]
 name = "blk0"
-socket = "run/virt-axi.sock"
-log = "run/virt-axi-backend.log"
+socket = "run/axi.sock"
+log = "run/axi-backend.log"
 image = "run/blk0.img"
 readonly = false
 
 [[targets.qemu.devices]]
 name = "con0"
-socket = "run/virt-axi-console.sock"
-log = "run/virt-axi-console-backend.log"
+socket = "run/axi-console.sock"
+log = "run/axi-console-backend.log"
 output = "run/cond.out"
 ```
 
@@ -161,8 +161,8 @@ The launcher starts backend daemons with one comma-separated `key=value` argumen
 Examples from the sample config:
 
 ```text
-out/virtio-blkd name=blk0,socket=/.../run/virt-axi.sock,ram_access=qemu-mediated,image=/.../run/blk0.img,readonly=false
-out/virtio-consoled name=con0,socket=/.../run/virt-axi-console.sock,ram_access=qemu-mediated,output=/.../run/cond.out
+out/virtio-blkd name=blk0,socket=/.../run/axi.sock,ram_access=qemu-mediated,image=/.../run/blk0.img,readonly=false
+out/virtio-consoled name=con0,socket=/.../run/axi-console.sock,ram_access=qemu-mediated,output=/.../run/cond.out
 ```
 
 Use `--no-backend` to launch only QEMU and manage backend daemons manually.
@@ -179,8 +179,8 @@ mmio = { base = "0xfeb00400", size = "0x200", irq = 18 }
 
 [[targets.qemu.devices]]
 name = "con1"
-socket = "run/virt-axi-console-con1.sock"
-log = "run/virt-axi-console-con1-backend.log"
+socket = "run/axi-console-con1.sock"
+log = "run/axi-console-con1-backend.log"
 output = "run/con1.out"
 ```
 

@@ -3,21 +3,21 @@ index 80c8a6a58d..f83ef340cc 100644
 --- a/hw/misc/Kconfig
 +++ b/hw/misc/Kconfig
 @@ -1,3 +1,7 @@
-+config VIRT_AXI
++config AXI
 +    bool
 +    default y
 +
  config APPLESMC
      bool
      depends on ISA_BUS
-diff --git a/configs/devices/aarch64-softmmu/virt-axi.mak b/configs/devices/aarch64-softmmu/virt-axi.mak
+diff --git a/configs/devices/aarch64-softmmu/virt-minimal.mak b/configs/devices/aarch64-softmmu/virt-minimal.mak
 new file mode 100644
 index 0000000000..93ad1976cb
 --- /dev/null
-+++ b/configs/devices/aarch64-softmmu/virt-axi.mak
++++ b/configs/devices/aarch64-softmmu/virt-minimal.mak
 @@ -0,0 +1,2 @@
 +CONFIG_ARM_VIRT=y
-+CONFIG_VIRT_AXI=y
++CONFIG_AXI=y
 diff --git a/hw/cxl/cxl-host-stubs.c b/hw/cxl/cxl-host-stubs.c
 index f394d8e572..a08746bcb2 100644
 --- a/hw/cxl/cxl-host-stubs.c
@@ -41,7 +41,7 @@ index 7f0023c65a..eeb05a80da 100644
      machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
      machine_class_allow_dynamic_sysbus_dev(mc, TYPE_UEFI_VARS_SYSBUS);
      machine_class_allow_dynamic_sysbus_dev(mc, TYPE_ARM_SMMUV3);
-+    machine_class_allow_dynamic_sysbus_dev(mc, "virt-axi");
++    machine_class_allow_dynamic_sysbus_dev(mc, "axi");
  #ifdef CONFIG_TPM
      machine_class_allow_dynamic_sysbus_dev(mc, TYPE_TPM_TIS_SYSBUS);
  #endif
@@ -53,14 +53,14 @@ index c4a7da3707..db77711318 100644
      TYPE_BINDING(TYPE_ARM_SMMUV3, no_fdt_node),
      TYPE_BINDING(TYPE_RAMFB_DEVICE, no_fdt_node),
      TYPE_BINDING(TYPE_UEFI_VARS_SYSBUS, add_uefi_vars_node),
-+    TYPE_BINDING("virt-axi", no_fdt_node),
++    TYPE_BINDING("axi", no_fdt_node),
      TYPE_BINDING("", NULL), /* last element */
  };
-diff --git a/hw/misc/virt-axi.c b/hw/misc/virt-axi.c
+diff --git a/hw/misc/axi.c b/hw/misc/axi.c
 new file mode 100644
 index 0000000000..14521bdf7f
 --- /dev/null
-+++ b/hw/misc/virt-axi.c
++++ b/hw/misc/axi.c
 @@ -0,0 +1,504 @@
 +/*
 + * Emulated AXI fabric proxy device.
@@ -90,37 +90,37 @@ index 0000000000..14521bdf7f
 +#include <sys/un.h>
 +#include <unistd.h>
 +
-+#define TYPE_VIRT_AXI "virt-axi"
-+OBJECT_DECLARE_SIMPLE_TYPE(VirtAxiState, VIRT_AXI)
++#define TYPE_AXI "axi"
++OBJECT_DECLARE_SIMPLE_TYPE(AxiState, AXI)
 +
-+typedef enum VirtAxiRamAccess {
-+    VIRT_AXI_RAM_ACCESS_SHARED_MEM,
-+    VIRT_AXI_RAM_ACCESS_QEMU_MEDIATED,
-+} VirtAxiRamAccess;
++typedef enum AxiRamAccess {
++    AXI_RAM_ACCESS_SHARED_MEM,
++    AXI_RAM_ACCESS_QEMU_MEDIATED,
++} AxiRamAccess;
 +
-+typedef enum VirtAxiMsgKind {
-+    VIRT_AXI_MSG_HELLO = 1,
-+    VIRT_AXI_MSG_MEM_REGION = 2,
-+    VIRT_AXI_MSG_MMIO_READ = 3,
-+    VIRT_AXI_MSG_MMIO_READ_REPLY = 4,
-+    VIRT_AXI_MSG_MMIO_WRITE = 5,
-+    VIRT_AXI_MSG_IRQ_ASSERT = 6,
-+    VIRT_AXI_MSG_IRQ_DEASSERT = 7,
-+    VIRT_AXI_MSG_DMA_READ = 8,
-+    VIRT_AXI_MSG_DMA_READ_REPLY = 9,
-+    VIRT_AXI_MSG_DMA_WRITE = 10,
-+    VIRT_AXI_MSG_ERROR = 0xffff,
-+} VirtAxiMsgKind;
++typedef enum AxiMsgKind {
++    AXI_MSG_HELLO = 1,
++    AXI_MSG_MEM_REGION = 2,
++    AXI_MSG_MMIO_READ = 3,
++    AXI_MSG_MMIO_READ_REPLY = 4,
++    AXI_MSG_MMIO_WRITE = 5,
++    AXI_MSG_IRQ_ASSERT = 6,
++    AXI_MSG_IRQ_DEASSERT = 7,
++    AXI_MSG_DMA_READ = 8,
++    AXI_MSG_DMA_READ_REPLY = 9,
++    AXI_MSG_DMA_WRITE = 10,
++    AXI_MSG_ERROR = 0xffff,
++} AxiMsgKind;
 +
-+typedef struct VirtAxiMsgHeader {
++typedef struct AxiMsgHeader {
 +    uint16_t kind;
 +    uint16_t flags;
 +    uint32_t window_id;
 +    uint64_t offset;
 +    uint32_t length;
-+} VirtAxiMsgHeader;
++} AxiMsgHeader;
 +
-+struct VirtAxiState {
++struct AxiState {
 +    SysBusDevice parent_obj;
 +
 +    MemoryRegion mmio;
@@ -130,13 +130,13 @@ index 0000000000..14521bdf7f
 +    char *socket_path;
 +    char *ram_access;
 +    char *target;
-+    VirtAxiRamAccess ram_access_mode;
++    AxiRamAccess ram_access_mode;
 +    int sockfd;
 +    bool socket_error_reported;
 +    qemu_irq irq;
 +};
 +
-+static bool virt_axi_io_all(int fd, void *buf, size_t len, bool is_write)
++static bool axi_io_all(int fd, void *buf, size_t len, bool is_write)
 +{
 +    uint8_t *pos = buf;
 +
@@ -167,7 +167,7 @@ index 0000000000..14521bdf7f
 +    return true;
 +}
 +
-+static void virt_axi_close(VirtAxiState *s)
++static void axi_close(AxiState *s)
 +{
 +    if (s->sockfd >= 0) {
 +        close(s->sockfd);
@@ -175,7 +175,7 @@ index 0000000000..14521bdf7f
 +    }
 +}
 +
-+static bool virt_axi_connect(VirtAxiState *s)
++static bool axi_connect(AxiState *s)
 +{
 +    struct sockaddr_un addr;
 +    int fd;
@@ -210,7 +210,7 @@ index 0000000000..14521bdf7f
 +fail:
 +    if (!s->socket_error_reported) {
 +        warn_report("%s: cannot connect to %s: %s",
-+                    TYPE_VIRT_AXI,
++                    TYPE_AXI,
 +                    s->socket_path,
 +                    g_strerror(errno));
 +        s->socket_error_reported = true;
@@ -218,10 +218,10 @@ index 0000000000..14521bdf7f
 +    return false;
 +}
 +
-+static bool virt_axi_send_header(VirtAxiState *s, VirtAxiMsgKind kind,
++static bool axi_send_header(AxiState *s, AxiMsgKind kind,
 +                                hwaddr addr, uint32_t len)
 +{
-+    VirtAxiMsgHeader hdr = {
++    AxiMsgHeader hdr = {
 +        .kind = kind,
 +        .flags = 0,
 +        .window_id = 0,
@@ -229,22 +229,22 @@ index 0000000000..14521bdf7f
 +        .length = len,
 +    };
 +
-+    if (!virt_axi_connect(s)) {
++    if (!axi_connect(s)) {
 +        return false;
 +    }
 +
-+    if (!virt_axi_io_all(s->sockfd, &hdr, sizeof(hdr), true)) {
-+        virt_axi_close(s);
++    if (!axi_io_all(s->sockfd, &hdr, sizeof(hdr), true)) {
++        axi_close(s);
 +        return false;
 +    }
 +
 +    return true;
 +}
 +
-+static bool virt_axi_send_reply(VirtAxiState *s, VirtAxiMsgKind kind,
++static bool axi_send_reply(AxiState *s, AxiMsgKind kind,
 +                               hwaddr addr, uint32_t len)
 +{
-+    VirtAxiMsgHeader hdr = {
++    AxiMsgHeader hdr = {
 +        .kind = kind,
 +        .flags = 0,
 +        .window_id = 0,
@@ -252,49 +252,49 @@ index 0000000000..14521bdf7f
 +        .length = len,
 +    };
 +
-+    return virt_axi_io_all(s->sockfd, &hdr, sizeof(hdr), true);
++    return axi_io_all(s->sockfd, &hdr, sizeof(hdr), true);
 +}
 +
-+static void virt_axi_assert_irq(VirtAxiState *s)
++static void axi_assert_irq(AxiState *s)
 +{
 +    if (!s->irq) {
 +        qemu_log_mask(LOG_GUEST_ERROR,
 +                      "%s: backend requested IRQ %u but it is not wired\n",
-+                      TYPE_VIRT_AXI, s->irq_num);
++                      TYPE_AXI, s->irq_num);
 +        return;
 +    }
 +
 +    qemu_set_irq(s->irq, 1);
 +}
 +
-+static bool virt_axi_service_backend(VirtAxiState *s)
++static bool axi_service_backend(AxiState *s)
 +{
-+    VirtAxiMsgHeader hdr;
++    AxiMsgHeader hdr;
 +    g_autofree uint8_t *buf = NULL;
 +    MemTxResult result;
 +
 +    for (;;) {
-+        if (!virt_axi_io_all(s->sockfd, &hdr, sizeof(hdr), false)) {
-+            virt_axi_close(s);
++        if (!axi_io_all(s->sockfd, &hdr, sizeof(hdr), false)) {
++            axi_close(s);
 +            return false;
 +        }
 +
 +        switch (hdr.kind) {
-+        case VIRT_AXI_MSG_ERROR:
++        case AXI_MSG_ERROR:
 +            return true;
-+        case VIRT_AXI_MSG_IRQ_ASSERT:
-+            virt_axi_assert_irq(s);
++        case AXI_MSG_IRQ_ASSERT:
++            axi_assert_irq(s);
 +            break;
-+        case VIRT_AXI_MSG_IRQ_DEASSERT:
++        case AXI_MSG_IRQ_DEASSERT:
 +            if (s->irq) {
 +                qemu_set_irq(s->irq, 0);
 +            }
 +            break;
-+        case VIRT_AXI_MSG_DMA_READ:
++        case AXI_MSG_DMA_READ:
 +            if (!hdr.length) {
-+                if (!virt_axi_send_reply(s, VIRT_AXI_MSG_DMA_READ_REPLY,
++                if (!axi_send_reply(s, AXI_MSG_DMA_READ_REPLY,
 +                                               hdr.offset, 0)) {
-+                    virt_axi_close(s);
++                    axi_close(s);
 +                    return false;
 +                }
 +                break;
@@ -304,23 +304,23 @@ index 0000000000..14521bdf7f
 +                                      MEMTXATTRS_UNSPECIFIED, buf, hdr.length,
 +                                      false);
 +            if (result != MEMTX_OK ||
-+                !virt_axi_send_reply(s, VIRT_AXI_MSG_DMA_READ_REPLY,
++                !axi_send_reply(s, AXI_MSG_DMA_READ_REPLY,
 +                                           hdr.offset, hdr.length) ||
-+                !virt_axi_io_all(s->sockfd, buf, hdr.length, true)) {
-+                virt_axi_close(s);
++                !axi_io_all(s->sockfd, buf, hdr.length, true)) {
++                axi_close(s);
 +                return false;
 +            }
 +            g_clear_pointer(&buf, g_free);
 +            break;
-+        case VIRT_AXI_MSG_DMA_WRITE:
++        case AXI_MSG_DMA_WRITE:
 +            buf = g_malloc0(hdr.length);
 +            if ((hdr.length &&
-+                 !virt_axi_io_all(s->sockfd, buf, hdr.length, false)) ||
++                 !axi_io_all(s->sockfd, buf, hdr.length, false)) ||
 +                address_space_rw(&address_space_memory, hdr.offset,
 +                                 MEMTXATTRS_UNSPECIFIED, buf, hdr.length,
 +                                 true) != MEMTX_OK ||
-+                !virt_axi_send_reply(s, VIRT_AXI_MSG_ERROR, 0, 0)) {
-+                virt_axi_close(s);
++                !axi_send_reply(s, AXI_MSG_ERROR, 0, 0)) {
++                axi_close(s);
 +                return false;
 +            }
 +            g_clear_pointer(&buf, g_free);
@@ -328,67 +328,67 @@ index 0000000000..14521bdf7f
 +        default:
 +            qemu_log_mask(LOG_GUEST_ERROR,
 +                          "%s: unsupported backend message kind=%u\n",
-+                          TYPE_VIRT_AXI, hdr.kind);
-+            virt_axi_close(s);
++                          TYPE_AXI, hdr.kind);
++            axi_close(s);
 +            return false;
 +        }
 +    }
 +}
 +
-+static uint64_t virt_axi_read(void *opaque, hwaddr addr, unsigned size)
++static uint64_t axi_read(void *opaque, hwaddr addr, unsigned size)
 +{
-+    VirtAxiState *s = opaque;
-+    VirtAxiMsgHeader reply;
++    AxiState *s = opaque;
++    AxiMsgHeader reply;
 +    uint64_t value = 0;
 +
-+    if (!virt_axi_send_header(s, VIRT_AXI_MSG_MMIO_READ, addr, size)) {
++    if (!axi_send_header(s, AXI_MSG_MMIO_READ, addr, size)) {
 +        return 0;
 +    }
 +
-+    if (!virt_axi_io_all(s->sockfd, &reply, sizeof(reply), false)) {
-+        virt_axi_close(s);
++    if (!axi_io_all(s->sockfd, &reply, sizeof(reply), false)) {
++        axi_close(s);
 +        return 0;
 +    }
 +
-+    if (reply.kind != VIRT_AXI_MSG_MMIO_READ_REPLY || reply.length > 8) {
++    if (reply.kind != AXI_MSG_MMIO_READ_REPLY || reply.length > 8) {
 +        qemu_log_mask(LOG_GUEST_ERROR,
 +                      "%s: invalid read reply kind=%u length=%u\n",
-+                      TYPE_VIRT_AXI,
++                      TYPE_AXI,
 +                      reply.kind,
 +                      reply.length);
-+        virt_axi_close(s);
++        axi_close(s);
 +        return 0;
 +    }
 +
 +    if (reply.length &&
-+        !virt_axi_io_all(s->sockfd, &value, reply.length, false)) {
-+        virt_axi_close(s);
++        !axi_io_all(s->sockfd, &value, reply.length, false)) {
++        axi_close(s);
 +        return 0;
 +    }
 +
 +    return value;
 +}
 +
-+static void virt_axi_write(void *opaque, hwaddr addr, uint64_t value,
++static void axi_write(void *opaque, hwaddr addr, uint64_t value,
 +                          unsigned size)
 +{
-+    VirtAxiState *s = opaque;
++    AxiState *s = opaque;
 +
-+    if (!virt_axi_send_header(s, VIRT_AXI_MSG_MMIO_WRITE, addr, size)) {
++    if (!axi_send_header(s, AXI_MSG_MMIO_WRITE, addr, size)) {
 +        return;
 +    }
 +
-+    if (!virt_axi_io_all(s->sockfd, &value, size, true)) {
-+        virt_axi_close(s);
++    if (!axi_io_all(s->sockfd, &value, size, true)) {
++        axi_close(s);
 +        return;
 +    }
 +
-+    virt_axi_service_backend(s);
++    axi_service_backend(s);
 +}
 +
-+static const MemoryRegionOps virt_axi_ops = {
-+    .read = virt_axi_read,
-+    .write = virt_axi_write,
++static const MemoryRegionOps axi_ops = {
++    .read = axi_read,
++    .write = axi_write,
 +    .endianness = DEVICE_LITTLE_ENDIAN,
 +    .valid.min_access_size = 1,
 +    .valid.max_access_size = 8,
@@ -396,17 +396,17 @@ index 0000000000..14521bdf7f
 +    .impl.max_access_size = 8,
 +};
 +
-+static bool virt_axi_parse_ram_access(VirtAxiState *s, Error **errp)
++static bool axi_parse_ram_access(AxiState *s, Error **errp)
 +{
 +    const char *mode = s->ram_access ?: "shared-mem";
 +
 +    if (!g_strcmp0(mode, "shared-mem")) {
-+        s->ram_access_mode = VIRT_AXI_RAM_ACCESS_SHARED_MEM;
++        s->ram_access_mode = AXI_RAM_ACCESS_SHARED_MEM;
 +        return true;
 +    }
 +
 +    if (!g_strcmp0(mode, "qemu-mediated")) {
-+        s->ram_access_mode = VIRT_AXI_RAM_ACCESS_QEMU_MEDIATED;
++        s->ram_access_mode = AXI_RAM_ACCESS_QEMU_MEDIATED;
 +        return true;
 +    }
 +
@@ -414,7 +414,7 @@ index 0000000000..14521bdf7f
 +    return false;
 +}
 +
-+static bool virt_axi_realize_x86(VirtAxiState *s, Error **errp)
++static bool axi_realize_x86(AxiState *s, Error **errp)
 +{
 +    Object *machine = qdev_get_machine();
 +    X86MachineState *x86ms;
@@ -425,16 +425,16 @@ index 0000000000..14521bdf7f
 +
 +    x86ms = X86_MACHINE(machine);
 +    if (!x86ms->ioapic2) {
-+        error_setg(errp, "virt-axi requires microvm ioapic2=on");
++        error_setg(errp, "axi requires microvm ioapic2=on");
 +        return true;
 +    }
 +
-+    if (s->irq_num < MICROVM_VIRT_AXI_IRQ_BASE ||
-+        s->irq_num >= MICROVM_VIRT_AXI_IRQ_BASE + MICROVM_VIRT_AXI_IRQ_COUNT) {
-+        error_setg(errp, "virt-axi irq %u outside reserved range %u..%u",
++    if (s->irq_num < MICROVM_AXI_IRQ_BASE ||
++        s->irq_num >= MICROVM_AXI_IRQ_BASE + MICROVM_AXI_IRQ_COUNT) {
++        error_setg(errp, "axi irq %u outside reserved range %u..%u",
 +                   s->irq_num,
-+                   MICROVM_VIRT_AXI_IRQ_BASE,
-+                   MICROVM_VIRT_AXI_IRQ_BASE + MICROVM_VIRT_AXI_IRQ_COUNT - 1);
++                   MICROVM_AXI_IRQ_BASE,
++                   MICROVM_AXI_IRQ_BASE + MICROVM_AXI_IRQ_COUNT - 1);
 +        return true;
 +    }
 +
@@ -444,7 +444,7 @@ index 0000000000..14521bdf7f
 +    return true;
 +}
 +
-+static void virt_axi_add_virt_fdt_node(VirtMachineState *vms, VirtAxiState *s)
++static void axi_add_virt_fdt_node(VirtMachineState *vms, AxiState *s)
 +{
 +    MachineState *ms = MACHINE(vms);
 +    g_autofree char *nodename = NULL;
@@ -464,7 +464,7 @@ index 0000000000..14521bdf7f
 +    qemu_fdt_setprop(ms->fdt, nodename, "dma-coherent", NULL, 0);
 +}
 +
-+static bool virt_axi_realize_arm_virt(VirtAxiState *s, Error **errp)
++static bool axi_realize_arm_virt(AxiState *s, Error **errp)
 +{
 +    Object *machine = qdev_get_machine();
 +    VirtMachineState *vms;
@@ -475,18 +475,18 @@ index 0000000000..14521bdf7f
 +
 +    vms = VIRT_MACHINE(machine);
 +    if (s->irq_num >= 256) {
-+        error_setg(errp, "virt-axi irq %u outside supported GIC SPI range", s->irq_num);
++        error_setg(errp, "axi irq %u outside supported GIC SPI range", s->irq_num);
 +        return true;
 +    }
 +
 +    s->irq = qdev_get_gpio_in(vms->gic, s->irq_num);
-+    virt_axi_add_virt_fdt_node(vms, s);
++    axi_add_virt_fdt_node(vms, s);
 +    return true;
 +}
 +
-+static void virt_axi_realize(DeviceState *dev, Error **errp)
++static void axi_realize(DeviceState *dev, Error **errp)
 +{
-+    VirtAxiState *s = VIRT_AXI(dev);
++    AxiState *s = AXI(dev);
 +    s->sockfd = -1;
 +
 +    if (!s->base) {
@@ -504,13 +504,13 @@ index 0000000000..14521bdf7f
 +        return;
 +    }
 +
-+    if (!virt_axi_parse_ram_access(s, errp)) {
++    if (!axi_parse_ram_access(s, errp)) {
 +        return;
 +    }
 +
-+    if (!virt_axi_realize_x86(s, errp) &&
-+        !virt_axi_realize_arm_virt(s, errp)) {
-+        error_setg(errp, "virt-axi is only supported on x86 microvm and ARM virt machines");
++    if (!axi_realize_x86(s, errp) &&
++        !axi_realize_arm_virt(s, errp)) {
++        error_setg(errp, "axi is only supported on x86 microvm and ARM virt machines");
 +        return;
 +    }
 +
@@ -518,14 +518,14 @@ index 0000000000..14521bdf7f
 +        return;
 +    }
 +
-+    memory_region_init_io(&s->mmio, OBJECT(dev), &virt_axi_ops, s,
-+                          TYPE_VIRT_AXI, s->size);
++    memory_region_init_io(&s->mmio, OBJECT(dev), &axi_ops, s,
++                          TYPE_AXI, s->size);
 +    memory_region_add_subregion(get_system_memory(), s->base, &s->mmio);
 +
 +    warn_report("%s: mapped 0x%" PRIx64 " bytes at 0x%" PRIx64
 +                ", irq=%u, socket=%s, ram-access=%s, target=%s; "
 +                "external forwarding protocol enabled",
-+                TYPE_VIRT_AXI,
++                TYPE_AXI,
 +                s->size,
 +                s->base,
 +                s->irq_num,
@@ -534,44 +534,44 @@ index 0000000000..14521bdf7f
 +                s->target ?: "");
 +}
 +
-+static const Property virt_axi_properties[] = {
-+    DEFINE_PROP_UINT64("base", VirtAxiState, base, 0),
-+    DEFINE_PROP_UINT64("size", VirtAxiState, size, 0),
-+    DEFINE_PROP_UINT32("irq", VirtAxiState, irq_num, 0),
-+    DEFINE_PROP_STRING("socket", VirtAxiState, socket_path),
-+    DEFINE_PROP_STRING("ram-access", VirtAxiState, ram_access),
-+    DEFINE_PROP_STRING("target", VirtAxiState, target),
++static const Property axi_properties[] = {
++    DEFINE_PROP_UINT64("base", AxiState, base, 0),
++    DEFINE_PROP_UINT64("size", AxiState, size, 0),
++    DEFINE_PROP_UINT32("irq", AxiState, irq_num, 0),
++    DEFINE_PROP_STRING("socket", AxiState, socket_path),
++    DEFINE_PROP_STRING("ram-access", AxiState, ram_access),
++    DEFINE_PROP_STRING("target", AxiState, target),
 +};
 +
-+static void virt_axi_class_init(ObjectClass *klass, const void *data)
++static void axi_class_init(ObjectClass *klass, const void *data)
 +{
 +    DeviceClass *dc = DEVICE_CLASS(klass);
 +
-+    dc->realize = virt_axi_realize;
++    dc->realize = axi_realize;
 +    dc->user_creatable = true;
-+    device_class_set_props(dc, virt_axi_properties);
++    device_class_set_props(dc, axi_properties);
 +    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 +}
 +
-+static const TypeInfo virt_axi_info = {
-+    .name = TYPE_VIRT_AXI,
++static const TypeInfo axi_info = {
++    .name = TYPE_AXI,
 +    .parent = TYPE_SYS_BUS_DEVICE,
-+    .instance_size = sizeof(VirtAxiState),
-+    .class_init = virt_axi_class_init,
++    .instance_size = sizeof(AxiState),
++    .class_init = axi_class_init,
 +};
 +
-+static void virt_axi_register_types(void)
++static void axi_register_types(void)
 +{
-+    type_register_static(&virt_axi_info);
++    type_register_static(&axi_info);
 +}
 +
-+type_init(virt_axi_register_types);
++type_init(axi_register_types);
 diff --git a/hw/misc/meson.build b/hw/misc/meson.build
 index 86596ef8bc..9f2bd7bb47 100644
 --- a/hw/misc/meson.build
 +++ b/hw/misc/meson.build
 @@ -1,3 +1,4 @@
-+system_ss.add(when: 'CONFIG_VIRT_AXI', if_true: files('virt-axi.c'))
++system_ss.add(when: 'CONFIG_AXI', if_true: files('axi.c'))
  system_ss.add(when: 'CONFIG_APPLESMC', if_true: files('applesmc.c'))
  system_ss.add(when: 'CONFIG_EDU', if_true: files('edu.c'))
  system_ss.add(when: 'CONFIG_FW_CFG_DMA', if_true: files('vmcoreinfo.c'))

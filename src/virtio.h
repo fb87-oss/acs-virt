@@ -28,7 +28,7 @@ struct virtio_desc {
 };
 
 /** @brief Fabric I/O context supplied by the active backend transport. */
-struct virt_axi_io;
+struct fabric_io;
 
 /** @brief Return device feature bits for a virtio device instance. */
 typedef uint64_t (*virtio_get_features_fn)(void *opaque);
@@ -38,7 +38,7 @@ typedef uint64_t (*virtio_get_config_fn)(void *opaque, uint64_t offset,
                                          uint32_t len);
 
 /** @brief Handle a guest queue notification. */
-typedef bool (*virtio_notify_queue_fn)(void *opaque, struct virt_axi_io *io,
+typedef bool (*virtio_notify_queue_fn)(void *opaque, struct fabric_io *io,
                                        uint32_t queue);
 
 /** @brief Device-specific hooks used by generic virtio and transport code. */
@@ -68,15 +68,15 @@ struct virtio_device {
 };
 
 /** @brief Fabric-provided DMA read callback type. */
-typedef bool (*virtio_dma_read_fn)(struct virt_axi_io *io, uint64_t gpa,
+typedef bool (*virtio_dma_read_fn)(struct fabric_io *io, uint64_t gpa,
                                    uint32_t len, uint8_t **data);
 
 /** @brief Fabric-provided 16-bit DMA read callback type. */
-typedef bool (*virtio_dma_read_u16_fn)(struct virt_axi_io *io, uint64_t gpa,
+typedef bool (*virtio_dma_read_u16_fn)(struct fabric_io *io, uint64_t gpa,
                                        uint16_t *value);
 
 /** @brief Fabric-provided DMA write callback type. */
-typedef bool (*virtio_dma_write_fn)(struct virt_axi_io *io, uint64_t gpa,
+typedef bool (*virtio_dma_write_fn)(struct fabric_io *io, uint64_t gpa,
                                     const void *data, uint32_t len);
 
 /**
@@ -180,7 +180,7 @@ void virtio_device_reset(struct virtio_device *dev);
  * @param desc Output descriptor structure.
  * @return bool True on success, false on DMA failure.
  */
-bool virtio_read_desc(const struct virtio_queue *queue, struct virt_axi_io *io,
+bool virtio_read_desc(const struct virtio_queue *queue, struct fabric_io *io,
                       virtio_dma_read_fn dma_read, uint16_t index,
                       struct virtio_desc *desc);
 
@@ -195,7 +195,7 @@ bool virtio_read_desc(const struct virtio_queue *queue, struct virt_axi_io *io,
  * @param len Number of bytes written by the device for this chain.
  * @return bool True on success, false on DMA failure.
  */
-bool virtio_add_used(const struct virtio_queue *queue, struct virt_axi_io *io,
+bool virtio_add_used(const struct virtio_queue *queue, struct fabric_io *io,
                      virtio_dma_read_u16_fn dma_read_u16,
                      virtio_dma_write_fn dma_write, uint16_t head,
                      uint32_t len);
@@ -211,7 +211,7 @@ bool virtio_add_used(const struct virtio_queue *queue, struct virt_axi_io *io,
  * @param available Output flag indicating whether a descriptor is available.
  * @return bool True on success, false on DMA failure.
  */
-bool virtio_next_avail(const struct virtio_queue *queue, struct virt_axi_io *io,
+bool virtio_next_avail(const struct virtio_queue *queue, struct fabric_io *io,
                        virtio_dma_read_u16_fn dma_read_u16, uint16_t *head,
                        bool *available);
 

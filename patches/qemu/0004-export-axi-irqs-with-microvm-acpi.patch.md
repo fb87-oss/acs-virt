@@ -1,6 +1,6 @@
-# 0004-export-virt-axi-irqs-with-microvm-acpi.patch
+# 0004-export-axi-irqs-with-microvm-acpi.patch
 
-This patch exports `virt-axi` windows through microvm ACPI so Linux maps the
+This patch exports `axi` windows through microvm ACPI so Linux maps the
 project-reserved primary IO-APIC GSIs through normal ACPI IRQ routing.
 
 It modifies:
@@ -11,7 +11,7 @@ hw/i386/acpi-microvm.c
 
 ## Behavior
 
-During DSDT construction, QEMU scans dynamic sysbus devices for `virt-axi`
+During DSDT construction, QEMU scans dynamic sysbus devices for `axi`
 instances. It emits them in reserved GSI order, `16..23`, so `blk0` on GSI `16`
 appears before `con0` on GSI `17`.
 
@@ -24,7 +24,7 @@ _CRS = Memory32Fixed(<base>, <size>) + Interrupt(edge, active-high, <gsi>)
 ```
 
 `LNRO0005` is Linux's virtio-mmio ACPI identifier. The MMIO window still maps to
-the QEMU `virt-axi` transport proxy; external backends continue to own virtio
+the QEMU `axi` transport proxy; external backends continue to own virtio
 device semantics.
 
 ## IRQ Range

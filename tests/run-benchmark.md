@@ -1,7 +1,7 @@
 # run-benchmark.sh
 
 `tests/run-benchmark.sh` runs a simple end-to-end throughput benchmark for the
-current `virt-axi` backend/frontend path.
+current `axi` backend/frontend path.
 
 The script boots the QEMU microvm through `nix run .#runvm`, which starts the
 configured backends through `scripts/chiplets-launcher.py`, waits for `/dev/vda`
@@ -35,9 +35,9 @@ The script creates or overwrites:
 
 ```text
 run/blk0.img
-run/virt-axi-backend.log
-run/virt-axi-console-backend.log
-run/virt-axi-bench-guest.log
+run/axi-backend.log
+run/axi-console-backend.log
+run/axi-bench-guest.log
 ```
 
 `run/blk0.img` is truncated to 64 MiB before each run.
@@ -61,7 +61,7 @@ path without spending guest CPU time generating random data.
 The script prints the parsed `dd` throughput lines, for example:
 
 ```text
-virt-axi dd benchmark complete
+axi dd benchmark complete
 config: size=16MiB bs=64K count=256
 write:  16777216 bytes (16.0MB) copied, 1.076516 seconds, 14.9MB/s
 read:   16777216 bytes (16.0MB) copied, 0.066046 seconds, 242.3MB/s

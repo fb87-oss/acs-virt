@@ -60,13 +60,13 @@ For AArch64, the repository provides:
 cmake/qemu-targets/arm64-default.cmake
 ```
 
-It builds `aarch64-softmmu` with the patched `virt-axi` device allowlist:
+It builds `aarch64-softmmu` with the patched `virt-minimal` device allowlist:
 
 ```cmake
 set(CHIPLETS_QEMU_NAME qemu-arm64-default)
 set(CHIPLETS_QEMU_SOFTMMU_TARGET aarch64-softmmu)
 set(CHIPLETS_QEMU_DEVICE_CONFIG_TARGET aarch64)
-set(CHIPLETS_QEMU_DEVICE_CONFIG virt-axi)
+set(CHIPLETS_QEMU_DEVICE_CONFIG virt-minimal)
 set(CHIPLETS_QEMU_SYSTEM_BINARY qemu-system-aarch64)
 ```
 
@@ -76,7 +76,7 @@ Build it with:
 scripts/build-qemu-arm64.sh
 ```
 
-The `virt-axi` QEMU proxy supports x86 microvm ACPI discovery and AArch64 `virt`
+The `axi` QEMU proxy supports x86 microvm ACPI discovery and AArch64 `virt`
 FDT discovery. The current launch sample remains x86 microvm-specific because it
 uses the x86 kernel/initrd and microvm machine parameters.
 

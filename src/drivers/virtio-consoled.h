@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "virt-axi.h"
+#include "fabric.h"
 #include "virtio.h"
 
 #define COND_QUEUE_SIZE 256u
@@ -13,7 +13,7 @@
 
 /** @brief Parsed runtime configuration for the virtio-console daemon. */
 struct cond_config {
-    char socket[4096];    ///< virt-axi Unix socket path.
+    char socket[4096];    ///< fabric endpoint path.
     char ram_access[128]; ///< RAM access mode string passed by the launcher.
     char output[4096];    ///< Host output path, or '-' for stdout.
 };
@@ -83,19 +83,19 @@ void cond_virtio_init(struct cond_virtio_device *dev,
  * @return bool True on success, false on DMA or queue processing failure.
  */
 bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
-                              struct virt_axi_io *io, uint32_t queue);
+                              struct fabric_io *io, uint32_t queue);
 
 /**
- * @brief Initializes a virt-axi MMIO device binding for virtio-console.
+ * @brief Initializes a fabric MMIO device binding for virtio-console.
  *
  * @param device Fabric device descriptor to populate.
  * @param dev virtio-console device state.
  * @param backend Console backend used by the device.
  * @param socket_path Unix socket path for QEMU to connect to.
  */
-void cond_virt_axi_init_device(struct virt_axi_device *device,
-                               struct cond_virtio_device *dev,
-                               struct cond_console_backend *backend,
-                               const char *socket_path);
+void cond_fabric_init_device(struct fabric_device *device,
+                             struct cond_virtio_device *dev,
+                             struct cond_console_backend *backend,
+                             const char *socket_path);
 
 #endif

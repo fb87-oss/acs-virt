@@ -9,5 +9,7 @@ if [[ -z "${IN_NIX_SHELL:-}" && -z "${CHIPLETS_CMAKE_NIX_SHELL:-}" ]]; then
   exec nix shell nixpkgs#cmake nixpkgs#gcc nixpkgs#git nixpkgs#ninja --command bash "$0" "$@"
 fi
 
-cmake -S "$root_dir" -B "$cmake_build_dir" -G Ninja -DCHIPLETS_FETCH_QEMU=OFF
+cmake -S "$root_dir" -B "$cmake_build_dir" -G Ninja \
+  -DCHIPLETS_FETCH_QEMU=OFF \
+  -DCHIPLETS_BACKEND_FABRIC="${CHIPLETS_BACKEND_FABRIC:-axi}"
 cmake --build "$cmake_build_dir" --target virtio-blkd virtio-consoled c-backend-tests --parallel

@@ -61,7 +61,7 @@ void virtio_device_init(struct virtio_device *dev, uint32_t device_id,
  * @param desc Output descriptor structure.
  * @return bool True on success, false on DMA failure.
  */
-bool virtio_read_desc(const struct virtio_queue *queue, struct virt_axi_io *io,
+bool virtio_read_desc(const struct virtio_queue *queue, struct fabric_io *io,
                       virtio_dma_read_fn dma_read, uint16_t index,
                       struct virtio_desc *desc) {
     uint8_t *data = NULL;
@@ -89,7 +89,7 @@ bool virtio_read_desc(const struct virtio_queue *queue, struct virt_axi_io *io,
  * @param len Number of bytes written by the device for this chain.
  * @return bool True on success, false on DMA failure.
  */
-bool virtio_add_used(const struct virtio_queue *queue, struct virt_axi_io *io,
+bool virtio_add_used(const struct virtio_queue *queue, struct fabric_io *io,
                      virtio_dma_read_u16_fn dma_read_u16,
                      virtio_dma_write_fn dma_write, uint16_t head,
                      uint32_t len) {
@@ -124,7 +124,7 @@ bool virtio_add_used(const struct virtio_queue *queue, struct virt_axi_io *io,
  * @param available Output flag indicating whether a descriptor is available.
  * @return bool True on success, false on DMA failure.
  */
-bool virtio_next_avail(const struct virtio_queue *queue, struct virt_axi_io *io,
+bool virtio_next_avail(const struct virtio_queue *queue, struct fabric_io *io,
                        virtio_dma_read_u16_fn dma_read_u16, uint16_t *head,
                        bool *available) {
     uint16_t avail_idx;

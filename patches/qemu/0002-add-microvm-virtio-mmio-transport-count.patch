@@ -11,9 +11,9 @@ index bd657a9388..f442cd02d7 100644
 -        /* use second ioapic (24 -> 47) for virtio-mmio irq lines */
 -        mms->virtio_irq_base = IO_APIC_SECONDARY_IRQBASE;
 -        mms->virtio_num_transports = IOAPIC_NUM_PINS;
-+        /* reserve primary IO-APIC GSIs 16 -> 23 for project virt-axi devices */
-+        mms->virtio_irq_base = MICROVM_VIRT_AXI_IRQ_BASE +
-+                               MICROVM_VIRT_AXI_IRQ_COUNT;
++        /* reserve primary IO-APIC GSIs 16 -> 23 for project axi devices */
++        mms->virtio_irq_base = MICROVM_AXI_IRQ_BASE +
++                               MICROVM_AXI_IRQ_COUNT;
      } else if (x86_machine_is_acpi_enabled(x86ms)) {
          mms->pcie_irq_base = 12;    /* 12 -> 15 */
          mms->virtio_irq_base = 16;  /* 16 -> 23 */
@@ -70,7 +70,7 @@ index bd657a9388..f442cd02d7 100644
 +        "Number of built-in virtio-mmio transports");
  
      machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
-+    machine_class_allow_dynamic_sysbus_dev(mc, "virt-axi");
++    machine_class_allow_dynamic_sysbus_dev(mc, "axi");
  
 diff --git a/include/hw/i386/microvm.h b/include/hw/i386/microvm.h
 index 2ad87ef551..b194649b4d 100644
@@ -80,9 +80,9 @@ index 2ad87ef551..b194649b4d 100644
  #define MICROVM_XHCI_BASE     0xfe900000
  #define MICROVM_XHCI_IRQ      10
  
-+/* Project-reserved primary IO-APIC range for externally-backed virt-axi MMIO. */
-+#define MICROVM_VIRT_AXI_IRQ_BASE  16
-+#define MICROVM_VIRT_AXI_IRQ_COUNT 8
++/* Project-reserved primary IO-APIC range for externally-backed axi MMIO. */
++#define MICROVM_AXI_IRQ_BASE  16
++#define MICROVM_AXI_IRQ_COUNT 8
 +
  #define PCIE_MMIO_BASE        0xc0000000
  #define PCIE_MMIO_SIZE        0x20000000

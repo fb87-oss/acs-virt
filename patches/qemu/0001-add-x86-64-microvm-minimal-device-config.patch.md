@@ -13,7 +13,7 @@ The config enables only the pieces needed by the current bring-up path:
 
 ```text
 CONFIG_MICROVM=y
-CONFIG_VIRT_AXI=y
+CONFIG_AXI=y
 ```
 
 ## Purpose
@@ -30,11 +30,11 @@ This patch provides that explicit device list.
 The current frontend VM needs:
 
 - `microvm`, because it is the small x86_64 machine used for MMIO-only boot.
-- `virt-axi`, because it is the QEMU-side MMIO forwarding device used by the C
+- `axi`, because it is the QEMU-side MMIO forwarding device used by the C
   backend path.
 
 Without this patch, the minimal QEMU build would not include the `microvm`
-machine or the `virt-axi` device.
+machine or the `axi` device.
 
 ## Runtime Relationship
 
@@ -44,5 +44,5 @@ runtime device by itself.
 Runtime device creation still comes from the launcher-generated QEMU argument:
 
 ```text
--device virt-axi,...
+-device axi,...
 ```

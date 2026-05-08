@@ -159,7 +159,7 @@ void cond_virtio_init(struct cond_virtio_device *dev,
  * @return bool True on success, false on DMA or output failure.
  */
 static bool process_tx_chain(struct cond_virtio_device *dev,
-                             struct virtio_queue *queue, struct virt_axi_io *io,
+                             struct virtio_queue *queue, struct fabric_io *io,
                              uint16_t head, uint32_t *used_len) {
     struct virtio_desc desc;
     uint16_t index = head;
@@ -167,11 +167,11 @@ static bool process_tx_chain(struct cond_virtio_device *dev,
 
     for (;;) {
         uint8_t *data = NULL;
-        if (!virtio_read_desc(queue, io, virt_axi_dma_read, index, &desc)) {
+        if (!virtio_read_desc(queue, io, fabric_dma_read, index, &desc)) {
             return false;
         }
         if (!(desc.flags & VRING_DESC_F_WRITE) && desc.len) {
-            if (!virt_axi_dma_read(io, desc.addr, desc.len, &data)) {
+            if (!fabric_dma_read(io, desc.addr, desc.len, &data)) {
                 return false;
             }
             if (!cond_console_write(dev->backend, data, desc.len)) {
@@ -200,7 +200,7 @@ static bool process_tx_chain(struct cond_virtio_device *dev,
  * @return bool True on success, false on DMA or queue processing failure.
  */
 bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
-                              struct virt_axi_io *io, uint32_t queue_index) {
+                              struct fabric_io *io, uint32_t queue_index) {
     struct virtio_queue *queue;
     bool used_any = false;
 
@@ -223,7 +223,7 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
         uint32_t used_len = 0;
         bool available;
 
-        if (!virtio_next_avail(queue, io, virt_axi_dma_read_u16, &head,
+        if (!virtio_next_avail(queue, io, fabric_dma_read_u16, &head,
                                &available)) {
             return false;
         }
@@ -235,8 +235,8 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
         if (!process_tx_chain(dev, queue, io, head, &used_len)) {
             return false;
         }
-        if (!virtio_add_used(queue, io, virt_axi_dma_read_u16,
-                             virt_axi_dma_write, head, used_len)) {
+        if (!virtio_add_used(queue, io, fabric_dma_read_u16, fabric_dma_write,
+                             head, used_len)) {
             return false;
         }
         queue->last_avail_idx++;
@@ -245,7 +245,7 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
 
     if (used_any) {
         dev->vdev.interrupt_status |= VIRTIO_INTERRUPT_VRING;
-        if (!virt_axi_raise_irq(io)) {
+        if (!fabric_raise_irq(io)) {
             return false;
         }
     }
@@ -253,8 +253,8 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
     return true;
 }
 
-/** @brief State binding virtio-console, virtio-mmio, and virt-axi together. */
-struct cond_virt_axi_binding {
+/** @brief State binding virtio-console, virtio-mmio, and axi together. */
+struct cond_fabric_binding {
     struct cond_virtio_device *dev;
     struct cond_console_backend *backend;
     struct virtio_mmio mmio;
@@ -263,50 +263,50 @@ struct cond_virt_axi_binding {
 /**
  * @brief Initializes per-connection virtio-mmio state after QEMU connects.
  *
- * @param opaque Console virt-axi binding state.
+ * @param opaque Console fabric binding state.
  */
 static void cond_connect(void *opaque) {
-    struct cond_virt_axi_binding *binding = opaque;
+    struct cond_fabric_binding *binding = opaque;
 
     cond_virtio_init(binding->dev, binding->backend);
     virtio_mmio_init(&binding->mmio, &binding->dev->vdev);
 }
 
 /**
- * @brief Handles a virt-axi MMIO read for the console device.
+ * @brief Handles a fabric MMIO read for the console device.
  *
- * @param opaque Console virt-axi binding state.
+ * @param opaque Console fabric binding state.
  * @param offset Device-relative MMIO offset.
  * @param len Access width in bytes.
  * @return uint64_t Register value returned to QEMU.
  */
 static uint64_t cond_mmio_read(void *opaque, uint64_t offset, uint32_t len) {
-    struct cond_virt_axi_binding *binding = opaque;
+    struct cond_fabric_binding *binding = opaque;
 
     return virtio_mmio_read(&binding->mmio, offset, len);
 }
 
 /**
- * @brief Handles a virt-axi MMIO write for the console device.
+ * @brief Handles a fabric MMIO write for the console device.
  *
- * @param opaque Console virt-axi binding state.
+ * @param opaque Console fabric binding state.
  * @param io Active fabric I/O context.
  * @param offset Device-relative MMIO offset.
  * @param raw_value Register value written by the guest.
  * @param len Access width in bytes.
  * @return bool True on success, false on notification or IRQ failure.
  */
-static bool cond_mmio_write(void *opaque, struct virt_axi_io *io,
-                            uint64_t offset, uint64_t raw_value, uint32_t len) {
-    struct cond_virt_axi_binding *binding = opaque;
+static bool cond_mmio_write(void *opaque, struct fabric_io *io, uint64_t offset,
+                            uint64_t raw_value, uint32_t len) {
+    struct cond_fabric_binding *binding = opaque;
 
     (void)len;
     virtio_mmio_write(&binding->mmio, offset, raw_value);
     if (offset == VIRTIO_MMIO_STATUS && raw_value == 0 &&
-        !virt_axi_lower_irq(io)) {
+        !fabric_lower_irq(io)) {
         return false;
     }
-    if (offset == VIRTIO_MMIO_INTERRUPT_ACK && !virt_axi_lower_irq(io)) {
+    if (offset == VIRTIO_MMIO_INTERRUPT_ACK && !fabric_lower_irq(io)) {
         return false;
     }
     if (offset == VIRTIO_MMIO_QUEUE_NOTIFY &&
@@ -318,19 +318,19 @@ static bool cond_mmio_write(void *opaque, struct virt_axi_io *io,
 }
 
 /**
- * @brief Initializes a virt-axi MMIO device binding for virtio-console.
+ * @brief Initializes a fabric MMIO device binding for virtio-console.
  *
  * @param device Fabric device descriptor to populate.
  * @param dev virtio-console device state.
  * @param backend Console backend used by the device.
  * @param socket_path Unix socket path for QEMU to connect to.
  */
-void cond_virt_axi_init_device(struct virt_axi_device *device,
-                               struct cond_virtio_device *dev,
-                               struct cond_console_backend *backend,
-                               const char *socket_path) {
-    static struct cond_virt_axi_binding binding;
-    static const struct virt_axi_device_ops ops = {
+void cond_fabric_init_device(struct fabric_device *device,
+                             struct cond_virtio_device *dev,
+                             struct cond_console_backend *backend,
+                             const char *socket_path) {
+    static struct cond_fabric_binding binding;
+    static const struct fabric_device_ops ops = {
         .connect = cond_connect,
         .read = cond_mmio_read,
         .write = cond_mmio_write,
@@ -430,8 +430,8 @@ int main(int argc, char **argv) {
     struct cond_config cfg;
     struct cond_console_backend backend;
     struct cond_virtio_device dev;
-    struct virt_axi_device virt_axi_device;
-    struct virt_axi bus;
+    struct fabric_device fabric_device;
+    struct fabric bus;
 
     if (argc != 2) {
         fprintf(
@@ -450,9 +450,9 @@ int main(int argc, char **argv) {
     fprintf(stderr, "cond: serving console on %s (%s), output=%s\n", cfg.socket,
             cfg.ram_access, cfg.output);
 
-    virt_axi_init(&bus);
-    cond_virt_axi_init_device(&virt_axi_device, &dev, &backend, cfg.socket);
-    if (!virt_axi_register(&bus, &virt_axi_device) || !virt_axi_run(&bus)) {
+    fabric_init(&bus);
+    cond_fabric_init_device(&fabric_device, &dev, &backend, cfg.socket);
+    if (!fabric_register(&bus, &fabric_device) || !fabric_run(&bus)) {
         cond_console_close(&backend);
         return 1;
     }
