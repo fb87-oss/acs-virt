@@ -54,6 +54,18 @@ static bool blkd_profile_enabled(void) {
     return enabled != 0;
 }
 
+/** @brief Returns whether read requests may DMA directly into guest RAM. */
+static bool blkd_direct_read_enabled(void) {
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *value = getenv("CHIPLETS_BLKD_DIRECT_READ");
+
+        enabled = value && strcmp(value, "0") ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
 /** @brief Adds elapsed monotonic nanoseconds to a counter. */
 static void profile_add(uint64_t *counter, uint64_t start_ns) {
     uint64_t end_ns;
@@ -324,6 +336,7 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
     uint16_t index;
     uint32_t chain_seen = 0;
     uint64_t chain_start_ns = profile ? monotonic_ns() : 0;
+    bool direct_read = blkd_direct_read_enabled();
 
     fprintf(stderr, "blkd: read descriptor chain head=%u\n", head);
 
@@ -369,25 +382,44 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
             if (!(desc.flags & VRING_DESC_F_WRITE)) {
                 status = VIRTIO_BLK_S_IOERR;
             } else if (status == VIRTIO_BLK_S_OK) {
-                uint64_t io_start_ns = profile ? monotonic_ns() : 0;
+                void *dma_data = NULL;
+                uint64_t dma_start_ns = profile ? monotonic_ns() : 0;
 
-                if (!ensure_io_buf(dev, desc.len) ||
-                    !blkd_block_read(dev->backend, offset + data_len,
-                                     dev->io_buf, desc.len)) {
-                    status = VIRTIO_BLK_S_IOERR;
-                } else {
-                    uint64_t dma_start_ns;
+                if (direct_read &&
+                    fabric_dma_map(io, desc.addr, desc.len, &dma_data)) {
+                    uint64_t io_start_ns;
 
                     if (profile) {
-                        profile_add(&profile->image_io_ns, io_start_ns);
+                        profile_add(&profile->guest_dma_ns, dma_start_ns);
                     }
-                    dma_start_ns = profile ? monotonic_ns() : 0;
-                    if (!fabric_dma_write(io, desc.addr, dev->io_buf,
-                                          desc.len)) {
+                    io_start_ns = profile ? monotonic_ns() : 0;
+                    if (!blkd_block_read(dev->backend, offset + data_len,
+                                         dma_data, desc.len)) {
                         status = VIRTIO_BLK_S_IOERR;
                     }
                     if (profile) {
-                        profile_add(&profile->guest_dma_ns, dma_start_ns);
+                        profile_add(&profile->image_io_ns, io_start_ns);
+                    }
+                    fabric_dma_unmap(io, dma_data, desc.len);
+                } else {
+                    uint64_t io_start_ns = profile ? monotonic_ns() : 0;
+
+                    if (!ensure_io_buf(dev, desc.len) ||
+                        !blkd_block_read(dev->backend, offset + data_len,
+                                         dev->io_buf, desc.len)) {
+                        status = VIRTIO_BLK_S_IOERR;
+                    } else {
+                        if (profile) {
+                            profile_add(&profile->image_io_ns, io_start_ns);
+                        }
+                        dma_start_ns = profile ? monotonic_ns() : 0;
+                        if (!fabric_dma_write(io, desc.addr, dev->io_buf,
+                                              desc.len)) {
+                            status = VIRTIO_BLK_S_IOERR;
+                        }
+                        if (profile) {
+                            profile_add(&profile->guest_dma_ns, dma_start_ns);
+                        }
                     }
                 }
             }

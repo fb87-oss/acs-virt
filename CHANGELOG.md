@@ -6,6 +6,7 @@
 - Tuned UIO orchestration to use a shorter notify delay for AArch64 frontends while preserving the stable x86_64 frontend delay.
 - Improved UIO block throughput by advertising larger virtio-blk segment limits, tuning the maximum segment size to 256KiB, adding direct DMA reads into caller buffers, and using QEMU notify acknowledgements where stable.
 - Added opt-in UIO block backend profiling with per-request timing for descriptor processing, guest DMA, image I/O, used-ring updates, and IRQ signaling.
+- Added an opt-in direct UIO read-DMA path so experiments can read block-image data directly into mapped frontend RAM without the reusable payload buffer.
 
 ## 2026-05-08
 

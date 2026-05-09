@@ -518,6 +518,23 @@ bool fabric_dma_read_into(struct fabric_io *io, uint64_t gpa, uint32_t len,
     return true;
 }
 
+/** @brief Socket-backed AXI DMA cannot expose a direct local memory mapping. */
+bool fabric_dma_map(struct fabric_io *io, uint64_t gpa, uint32_t len,
+                    void **data) {
+    (void)io;
+    (void)gpa;
+    (void)len;
+    *data = NULL;
+    return false;
+}
+
+/** @brief Socket-backed AXI DMA mappings are never acquired. */
+void fabric_dma_unmap(struct fabric_io *io, void *data, uint32_t len) {
+    (void)io;
+    (void)data;
+    (void)len;
+}
+
 /**
  * @brief Requests and decodes a 16-bit little-endian guest memory read.
  *

@@ -506,6 +506,24 @@ bool fabric_dma_read_into(struct fabric_io *io, uint64_t gpa, uint32_t len,
     return true;
 }
 
+/** @brief devmem DMA uses temporary mappings, so direct access is unsupported.
+ */
+bool fabric_dma_map(struct fabric_io *io, uint64_t gpa, uint32_t len,
+                    void **data) {
+    (void)io;
+    (void)gpa;
+    (void)len;
+    *data = NULL;
+    return false;
+}
+
+/** @brief devmem direct DMA mappings are never acquired. */
+void fabric_dma_unmap(struct fabric_io *io, void *data, uint32_t len) {
+    (void)io;
+    (void)data;
+    (void)len;
+}
+
 /**
  * @brief Requests a 16-bit little-endian guest physical memory read through
  * devmem.

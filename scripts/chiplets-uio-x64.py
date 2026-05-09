@@ -301,7 +301,15 @@ def main() -> int:
     notify_delay_us = 25000 if frontend_arch == "a64" else 50000
     notify_ack = not (backend_arch == "a64" and frontend_arch == "x64")
     profile_backend = os.environ.get("CHIPLETS_PROFILE_BACKEND") == "1"
-    blkd_prefix = "CHIPLETS_BLKD_PROFILE=1 " if profile_backend else ""
+    direct_read = os.environ.get("CHIPLETS_DIRECT_READ_DMA") == "1"
+    blkd_env = []
+    if profile_backend:
+        blkd_env.append("CHIPLETS_BLKD_PROFILE=1")
+    if direct_read:
+        blkd_env.append("CHIPLETS_BLKD_DIRECT_READ=1")
+    blkd_prefix = " ".join(blkd_env)
+    if blkd_prefix:
+        blkd_prefix += " "
 
     frontend_ram = run_dir / "frontend.ram"
     backend_ram = run_dir / "backend.ram"

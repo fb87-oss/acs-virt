@@ -74,7 +74,7 @@ bool fabric_run(struct fabric *fabric);
  * @return bool True on success, false on fabric or protocol failure.
  */
 bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
-                      uint8_t **data);
+                     uint8_t **data);
 
 /**
  * @brief Reads guest physical memory into a caller-provided buffer.
@@ -87,6 +87,28 @@ bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
  */
 bool fabric_dma_read_into(struct fabric_io *io, uint64_t gpa, uint32_t len,
                           void *data);
+
+/**
+ * @brief Maps guest physical memory into the backend address space when the
+ * active fabric supports direct access.
+ *
+ * @param io Active fabric I/O context.
+ * @param gpa Guest physical address to map.
+ * @param len Number of bytes to map.
+ * @param data Output pointer to mapped bytes.
+ * @return bool True when a direct mapping is available.
+ */
+bool fabric_dma_map(struct fabric_io *io, uint64_t gpa, uint32_t len,
+                    void **data);
+
+/**
+ * @brief Releases a pointer returned by fabric_dma_map.
+ *
+ * @param io Active fabric I/O context.
+ * @param data Mapped pointer returned by fabric_dma_map.
+ * @param len Mapping length originally requested.
+ */
+void fabric_dma_unmap(struct fabric_io *io, void *data, uint32_t len);
 
 /**
  * @brief Requests a 16-bit little-endian guest physical memory read.

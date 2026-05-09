@@ -180,6 +180,15 @@ updates, and frontend IRQ signaling:
 CHIPLETS_PROFILE_BACKEND=1 BENCH_SIZE_MB=64 tests/run-benchmark.sh
 ```
 
+An experimental direct read-DMA path can be enabled with
+`CHIPLETS_DIRECT_READ_DMA=1`. For UIO-backed devices this lets `virtio-blkd`
+read block-image data directly into the mapped frontend RAM aperture. The switch
+is opt-in while write-side throughput remains sensitive to benchmark variance:
+
+```sh
+CHIPLETS_DIRECT_READ_DMA=1 BENCH_SIZE_MB=64 tests/run-benchmark.sh
+```
+
 ## Benchmark Records
 
 The `perf/uio-throughput` branch improved block request coalescing by advertising

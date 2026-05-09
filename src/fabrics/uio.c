@@ -249,8 +249,8 @@ static bool map_resource(const struct uio_config *config, unsigned resource,
             return false;
         }
         while (current <= resource &&
-               fscanf(f, "0x%" SCNx64 " 0x%" SCNx64 " 0x%" SCNx64, &start,
-                      &end, &flags) == 3) {
+               fscanf(f, "0x%" SCNx64 " 0x%" SCNx64 " 0x%" SCNx64, &start, &end,
+                      &flags) == 3) {
             if (current == resource) {
                 break;
             }
@@ -542,7 +542,8 @@ bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
 }
 
 /**
- * @brief Reads bytes from the frontend RAM DMA resource into an existing buffer.
+ * @brief Reads bytes from the frontend RAM DMA resource into an existing
+ * buffer.
  *
  * @param io Active fabric I/O context.
  * @param gpa Frontend guest physical address.
@@ -563,6 +564,38 @@ bool fabric_dma_read_into(struct fabric_io *io, uint64_t gpa, uint32_t len,
     }
     memcpy(data, g_uio.dma.addr + offset, len);
     return true;
+}
+
+/**
+ * @brief Returns a direct pointer into the frontend RAM DMA resource.
+ *
+ * @param io Active fabric I/O context.
+ * @param gpa Frontend guest physical address.
+ * @param len Number of bytes to map.
+ * @param data Output pointer into the mapped DMA aperture.
+ * @return bool True on success, false when the range is out of bounds.
+ */
+bool fabric_dma_map(struct fabric_io *io, uint64_t gpa, uint32_t len,
+                    void **data) {
+    uint64_t offset;
+
+    (void)io;
+    *data = NULL;
+    if (!len) {
+        return true;
+    }
+    if (!dma_offset(gpa, len, &offset)) {
+        return false;
+    }
+    *data = g_uio.dma.addr + offset;
+    return true;
+}
+
+/** @brief UIO DMA mappings are owned by the fabric and do not need release. */
+void fabric_dma_unmap(struct fabric_io *io, void *data, uint32_t len) {
+    (void)io;
+    (void)data;
+    (void)len;
 }
 
 /**
