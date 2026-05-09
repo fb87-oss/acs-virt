@@ -10,7 +10,7 @@
 
 #define BLKD_SECTOR_SIZE 512u
 #define BLKD_QUEUE_SIZE 256u
-#define BLKD_MAX_SEG_SIZE (64u * 1024u)
+#define BLKD_MAX_SEG_SIZE (256u * 1024u)
 #define BLKD_MAX_SEGMENTS 128u
 
 /** @brief Parsed runtime configuration for the virtio-blk daemon. */
