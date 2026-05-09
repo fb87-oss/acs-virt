@@ -25,15 +25,16 @@ docs/runtime-config.schema.json
 ram_access = "qemu-mediated"
 ```
 
-`ram_access` is optional and defaults to `shared-mem` in the launcher. The active
-bring-up path should set it to `qemu-mediated`.
+`ram_access` is optional and defaults to `shared-mem` in the launcher. The
+checked-in TOML samples set it to `qemu-mediated`, which is the supported socket
+fabric data path for the current `qemu-socket` backend fabric.
 
 Supported values:
 
 - `qemu-mediated`: backends ask QEMU to perform guest DMA reads and writes over
   the proxy protocol.
-- `shared-mem`: reserved for the later direct guest RAM/ATU-backed queue-walking
-  fast path.
+- `shared-mem`: accepted by the launcher and QEMU property parser, but not used
+  by the current TOML samples.
 
 ## Device Inventory
 
@@ -83,12 +84,17 @@ parameters = { memory = "512M", kvm = true, pcie = false }
 
 Fields:
 
-- `type`: must be `microvm`.
-- `binary`: QEMU executable. Relative paths are resolved against the workspace and
-  passed to QEMU as absolute paths.
-- `parameters.memory`: guest RAM size passed to both `-object` and `-m`.
-- `parameters.kvm`: when true, the launcher adds `-enable-kvm`.
-- `parameters.pcie`: must remain false for the MMIO-only path.
+- `type`: optional QEMU machine target. Defaults to `microvm`; use `virt` for
+  AArch64 samples.
+- `binary`: optional QEMU executable. Defaults to
+  `out/qemu-x64-minimal/bin/qemu-system-x86_64`. Relative paths are resolved
+  against the workspace and passed to QEMU as absolute paths.
+- `parameters`: optional machine parameter table.
+- `parameters.memory`: guest RAM size passed to both `-object` and `-m`; defaults
+  to `512M`.
+- `parameters.kvm`: when true, the launcher adds `-enable-kvm`; defaults to true.
+- `parameters.pcie`: must remain false for the MMIO-only path; omitted means
+  false.
 - `parameters.cpu`: optional CPU model for AArch64 `virt`; defaults to `max`.
 - `parameters.append`: optional kernel command line override. The launcher
   defaults to `console=ttyS0 ...` for `microvm` and `console=ttyAMA0 ...` for
@@ -112,7 +118,8 @@ QEMU data files:
 ## Enabled QEMU Devices
 
 `[[targets.qemu.devices]]` is the QEMU enable list. Only devices listed here are
-emitted on the QEMU command line and launched through backend daemons.
+emitted on the QEMU command line and launched through backend daemons. The list
+is optional and defaults to empty.
 
 ```toml
 [[targets.qemu.devices]]
@@ -137,13 +144,19 @@ Common fields:
 
 Fields for `type = "virtio-blk"`:
 
-- `image`: block image path passed to `blkd`.
+- `image`: block image path passed to `blkd`; required when the referenced
+  inventory device is `type = "virtio-blk"`.
 - `readonly`: optional boolean, defaults to false in `blkd`.
 
 Fields for `type = "virtio-console"`:
 
 - `output`: optional output path passed to `virtio-consoled`. If omitted, `virtio-consoled` writes to
   stdout.
+
+The JSON Schema validates the decoded TOML shape and allowed field names. It does
+not cross-reference `[[targets.qemu.devices]]` entries back to `[[devices]]`, so
+launcher validation still enforces semantic requirements such as unknown device
+names and missing `image` values for enabled block devices.
 
 Guidelines:
 

@@ -1,6 +1,6 @@
-# devmem.c
+# linux_devmem.c
 
-`devmem.c` is the selectable backend fabric implementation for a Linux
+`linux_devmem.c` is the selectable backend fabric implementation for a Linux
 `/dev/mem` physical-memory-mapped deployment.
 
 It implements the common `fabric.h` entry points so the backend drivers and
@@ -9,6 +9,11 @@ virtio-mmio register aperture through `/dev/mem`, polls guest-written registers,
 dispatches MMIO writes to the driver callback, refreshes guest-visible read
 registers from the driver callback, and maps guest physical memory on demand for
 DMA reads and writes.
+
+The common fabric API includes optional direct DMA mapping. `linux_devmem.c`
+currently does not expose that path because it uses short-lived page-aligned
+`/dev/mem` mappings for each DMA operation; `fabric_dma_map` returns false so
+drivers use the copy helpers.
 
 Runtime configuration is supplied through environment variables or a compact
 endpoint string in the backend `socket` argument.

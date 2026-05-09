@@ -1,7 +1,7 @@
 # 0004-export-axi-irqs-with-microvm-acpi.patch
 
-This patch exports `axi` windows through microvm ACPI so Linux maps the
-project-reserved primary IO-APIC GSIs through normal ACPI IRQ routing.
+This patch exports frontend `axi` virtio windows through microvm ACPI so Linux
+maps the project-reserved primary IO-APIC GSIs through normal ACPI IRQ routing.
 
 It modifies:
 
@@ -24,8 +24,9 @@ _CRS = Memory32Fixed(<base>, <size>) + Interrupt(edge, active-high, <gsi>)
 ```
 
 `LNRO0005` is Linux's virtio-mmio ACPI identifier. The MMIO window still maps to
-the QEMU `axi` transport proxy; external backends continue to own virtio
-device semantics.
+the QEMU `axi` transport proxy; external backends continue to own virtio device
+semantics. UIO backend devices are not exposed to the frontend as
+`virtio,mmio`; they use the UIO resource path described in `docs/uio-fabric.md`.
 
 ## IRQ Range
 

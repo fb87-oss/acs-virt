@@ -1,26 +1,42 @@
 # chiplets-vmm-tools
 
 This repository contains the MMIO-only QEMU/frontend and C backend bring-up
-path for chiplet-oriented device modeling.
+path for chiplet-oriented device modeling. It supports the `axi-socket` topology
+and the `axi-linux-uio` topology. Both topologies use QEMU's custom `axi` device;
+they differ in what travels over Unix sockets and how the backend daemon accesses
+MMIO, DMA, and interrupts.
 
-The current working path is:
+The `axi-socket` topology used by `samples/axi-*.toml` is:
 
 ```text
 Linux guest
   -> upstream virtio_mmio + virtio_blk drivers
   -> MMIO window at 0xfeb00000
-  -> QEMU axi device
-  -> Unix socket protocol
+  -> QEMU axi device, mode=socket
+  -> Unix socket protocol carrying control, DMA/data, and IRQ messages
   -> C blkd
   -> run/blk0.img
 
 Linux guest
   -> upstream virtio_mmio + virtio_console drivers
   -> MMIO window at 0xfeb00200
-  -> QEMU axi device
-  -> Unix socket protocol
+  -> QEMU axi device, mode=socket
+  -> Unix socket protocol carrying control, DMA/data, and IRQ messages
   -> C cond
   -> run/cond.out
+```
+
+The `axi-linux-uio` topology used by `tests/run-tests*.sh` and
+`tests/run-benchmark*.sh` is:
+
+```text
+frontend Linux guest
+  -> upstream virtio_mmio + virtio_blk/virtio_console drivers
+  -> QEMU axi frontend device with virtio,mmio discovery
+  -> Unix control socket only, plus shared MMIO/RAM files
+  -> QEMU axi backend device
+  -> backend Linux guest UIO device
+  -> virtio-blkd / virtio-consoled using CHIPLETS_BACKEND_FABRIC=linux-uio
 ```
 
 QEMU does not implement the virtio block or console devices. QEMU only traps
@@ -43,8 +59,9 @@ backends own virtio-mmio register models, virtqueue processing, and endpoint I/O
 - Use `run/axi.sock` as the frontend/backend socket.
 - Use `run/axi-console.sock` as the frontend/console-backend socket.
 - Use `run/blk0.img` as the block image.
-- Current RAM access mode is `qemu-mediated`; `shared-mem` is the planned fast
-  path.
+- Runtime TOML samples use the `axi-socket` topology with
+  `ram_access = "qemu-mediated"`. `axi-linux-uio` tests use shared host-backed
+  MMIO/RAM files and do not use the TOML launcher path.
 - For every new `.patch` or `.c` source file, add a matching
   `<filename>.md` explanation file.
 
@@ -59,14 +76,18 @@ scripts/build-qemu-arm64.sh                   CMake-backed AArch64 QEMU build sc
 scripts/chiplets-launcher.py                  TOML orchestrator and QEMU launcher
 tests/run-tests.sh                            end-to-end smoke test
 tests/run-benchmark.sh                        dd throughput benchmark
+tests/run-tests-a64.sh                        ARM64 UIO smoke test
+tests/run-benchmark-a64.sh                    ARM64 UIO dd benchmark
 samples/axi-x64.toml                      x86_64 sample frontend/backend config
 samples/axi-a64.toml                      AArch64 sample frontend/backend config
 docs/runtime-config.md                        config schema and authoring guide
+docs/uio-fabric.md                            two-VM UIO architecture and benchmarks
 docs/runtime-config.schema.json               machine-readable runtime schema
 docs/qemu-target-toolchains.md                QEMU target file guide
 src/fabrics/fabric.h                           C backend fabric API
-src/fabrics/axi.c                         C AXI socket fabric transport
-src/fabrics/devmem.c                           C Linux /dev/mem fabric transport
+src/fabrics/qemu_socket.c                       C qemu-socket backend fabric
+src/fabrics/linux_devmem.c                      C linux-devmem backend fabric
+src/fabrics/linux_uio.c                         C linux-uio backend fabric
 src/drivers/virtio-blkd.c                     C virtio-blk daemon and device model
 src/drivers/virtio-consoled.c                 C virtio-console daemon and device model
 docs/axi-protocol.md                      QEMU/backend socket protocol
@@ -116,6 +137,7 @@ Patch docs live beside the patches:
 patches/qemu/0001-add-x86-64-microvm-minimal-device-config.patch.md
 patches/qemu/0002-add-microvm-virtio-mmio-transport-count.patch.md
 patches/qemu/0003-add-axi-device.patch.md
+patches/qemu/0004-export-axi-irqs-with-microvm-acpi.patch.md
 ```
 
 ## Build C Tools
@@ -138,17 +160,22 @@ The backend drivers build against a stable `fabric.h` API. Select the fabric
 implementation at configure time with `CHIPLETS_BACKEND_FABRIC`:
 
 ```sh
-CHIPLETS_BACKEND_FABRIC=axi scripts/build-tools.sh
-cmake -S . -B build/cmake -G Ninja -DCHIPLETS_BACKEND_FABRIC=devmem
+CHIPLETS_BACKEND_FABRIC=qemu-socket scripts/build-tools.sh
+cmake -S . -B build/cmake -G Ninja -DCHIPLETS_BACKEND_FABRIC=linux-devmem
 ```
 
-`axi` is the QEMU socket fabric used by the samples and tests. `devmem` is
-the Linux `/dev/mem` fabric for physical virtio-mmio apertures and guest memory.
+`qemu-socket` is the backend fabric used by the `axi-socket` TOML samples. Its
+Unix socket carries control, DMA/data, and IRQ messages. `linux-devmem` is the
+Linux `/dev/mem` backend fabric for physical virtio-mmio apertures and guest
+memory. `linux-uio` is the backend fabric used by the `axi-linux-uio` two-VM
+smoke and benchmark wrappers. In that topology Unix sockets carry only QEMU
+control messages; data and MMIO access use shared memory exposed through Linux
+UIO maps.
 
 For `devmem`, pass the aperture via environment or a compact endpoint string:
 
 ```sh
-CHIPLETS_BACKEND_FABRIC=devmem \
+CHIPLETS_BACKEND_FABRIC=linux-devmem \
 CHIPLETS_DEVMEM_MMIO_BASE=0xfeb00000 \
 scripts/build-tools.sh
 
@@ -255,7 +282,7 @@ The active devices use separate interrupt lines: `blkd` uses GSI `16`, and
 
 ## Smoke Test
 
-Run the full backend/frontend smoke test:
+Run the x86_64 UIO backend/frontend smoke test:
 
 ```sh
 tests/run-tests.sh
@@ -263,9 +290,9 @@ tests/run-tests.sh
 
 The test:
 
-- creates `run/blk0.img`
-- launches `virtio-blkd` and `virtio-consoled` through `scripts/chiplets-launcher.py`
-- boots the frontend VM
+- builds backend daemons with `CHIPLETS_BACKEND_FABRIC=linux-uio`
+- packages a temporary initrd with the needed UIO module support
+- launches backend and frontend VMs through `scripts/chiplets-uio-x64.py`
 - waits for `/dev/vda`
 - writes one 512-byte sector
 - waits for `/dev/hvc0` and writes a console smoke string
@@ -274,11 +301,18 @@ The test:
 Expected output:
 
 ```text
-axi backend/frontend smoke test passed
-backend log: run/axi-backend.log
-console backend log: run/axi-console-backend.log
-console output: run/cond.out
-guest log:   run/axi-guest.log
+x86_64 backend / x86_64 frontend UIO smoke test passed
+run dir: /tmp/uio-x64-smoke.XXXXXX
+frontend log: /tmp/uio-x64-smoke.XXXXXX/frontend.log
+backend log:  /tmp/uio-x64-smoke.XXXXXX/backend.log
+```
+
+ARM64 and mixed-architecture UIO smoke wrappers are also available:
+
+```sh
+tests/run-tests-a64.sh
+tests/run-tests-a64-backend-x64-frontend.sh
+tests/run-tests-x64-backend-a64-frontend.sh
 ```
 
 ## Benchmark
@@ -289,25 +323,27 @@ Run the dd benchmark:
 tests/run-benchmark.sh
 ```
 
-The benchmark launches the configured backends through `scripts/chiplets-launcher.py`.
+The benchmark launches the two-VM UIO topology through `scripts/chiplets-uio-x64.py`.
 
 Defaults:
 
 ```text
-BENCH_SIZE_MB=16
+BENCH_SIZE_MB=1
 BENCH_BS=64K
-BENCH_GUEST_TIMEOUT=180
+BENCH_REPEAT=1
+BENCH_GUEST_TIMEOUT=300
 ```
 
-Example with custom size and block size:
+Example with custom size, block size, and repeated runs:
 
 ```sh
-BENCH_SIZE_MB=32 BENCH_BS=128K tests/run-benchmark.sh
+BENCH_SIZE_MB=32 BENCH_BS=128K BENCH_REPEAT=3 tests/run-benchmark.sh
 ```
 
-The benchmark prints parsed `dd` throughput lines for write and read. The current
-backend uses `qemu-mediated` DMA, so benchmark numbers measure the debug
-transport path, not the planned shared-memory fast path.
+The benchmark prints each parsed `dd` throughput line and, when `BENCH_REPEAT` is
+greater than one, min/average/max throughput summaries. Optional switches include
+`CHIPLETS_PROFILE_BACKEND=1` for backend timing and `CHIPLETS_DIRECT_READ_DMA=1`
+for the experimental direct read-DMA path.
 
 ## Standard Verification Flow
 
@@ -350,9 +386,11 @@ run/
 
 ## Current Limitations
 
-- Backend guest RAM access is `qemu-mediated`, so descriptor/data access requires
-  proxy round trips.
-- The shared-memory fast path is not implemented yet.
+- Socket-mode TOML samples use `qemu-mediated` RAM access, so descriptor/data
+  access requires proxy round trips on that path.
+- UIO shared-memory DMA is implemented for the two-VM benchmark path, but direct
+  block-image reads into frontend RAM remain opt-in while benchmark variance is
+  characterized.
 - The backend is intentionally minimal and focused on bring-up correctness.
 - `blkd` supports the descriptor chains used by current smoke and benchmark
   tests; broader virtio-blk coverage is intentionally minimal for bring-up.

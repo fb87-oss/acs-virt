@@ -1,16 +1,19 @@
-# AXI Bus Protocol
+# QEMU axi Socket Backend Protocol
 
-This protocol connects QEMU's `axi` device to an external device
-model. QEMU does not implement virtio devices; it only forwards MMIO accesses,
-RAM access requests, and IRQ events.
+This protocol connects QEMU's `axi mode=socket` device to an external backend
+daemon. QEMU does not implement virtio devices; it only forwards MMIO accesses,
+RAM access requests, and IRQ events. The `axi-linux-uio` topology uses the same
+QEMU `axi` device in `mode=uio`, but its Unix socket carries only QEMU-to-QEMU
+control messages. Data and MMIO access are shared memory exposed to the backend
+daemon through Linux UIO.
 
 ## Modes
 
-`shared-mem` is the fast path. QEMU sends guest memory region file descriptors
-to the backend, and the backend walks queues directly.
+`shared-mem` is accepted by QEMU's socket-mode property parser, but the current C
+`axi` fabric still uses the mediated DMA message helpers.
 
-`qemu-mediated` is the debug path. The backend requests guest memory reads and
-writes through QEMU using `DMA_READ` and `DMA_WRITE` messages.
+`qemu-mediated` is the path used by the TOML samples. The backend requests guest
+memory reads and writes through QEMU using `DMA_READ` and `DMA_WRITE` messages.
 
 ## Messages
 
@@ -24,7 +27,7 @@ u64 offset
 u32 length
 ```
 
-Initial message kinds:
+Socket-mode message kinds:
 
 ```text
 HELLO           = 1
@@ -53,3 +56,12 @@ microvm ACPI export for `axi` devices.
 The backend owns endpoint semantics such as `virtio-mmio` registers, feature
 negotiation, virtqueues, block I/O, network packets, and console data. QEMU owns
 only MMIO trapping, guest RAM exposure or mediation, and IRQ injection.
+
+## UIO Distinction
+
+In UIO mode the QEMU `axi` devices are launched with properties such as
+`mode=uio`, `role=frontend|backend`, `control-socket=...`, `memdev=...`, and
+`dma-memdev=...`. Frontend and backend QEMU processes share host-backed files for
+the virtio-mmio window and frontend RAM. The backend daemon talks to Linux UIO
+resources instead of this socket protocol, so `DMA_READ` and `DMA_WRITE` messages
+are not used on the UIO benchmark path.

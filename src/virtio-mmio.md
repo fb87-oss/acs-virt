@@ -6,7 +6,7 @@ Linux's upstream `virtio_mmio` driver.
 This file adapts MMIO register reads and writes onto the transport-independent
 `struct virtio_device` state from `virtio.h`. It is not a block or console
 driver, and it does not own the QEMU socket. The current socket transport is
-provided by `src/fabrics/axi.c`; this file only sees offsets, access sizes,
+provided by the selected backend fabric; this file only sees offsets, access sizes,
 and register values.
 
 Main responsibilities:

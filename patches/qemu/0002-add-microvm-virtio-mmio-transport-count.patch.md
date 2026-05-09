@@ -79,4 +79,8 @@ The actual device still comes from:
 
 ```text
 -device axi,id=blk0,base=...,size=...,irq=16,socket=...
+-device axi,id=blk0,mode=uio,role=frontend,base=...,size=...,irq=16,control-socket=...
 ```
+
+The first form is used by the TOML/socket launcher. The second form is used by
+the two-VM UIO orchestrator.

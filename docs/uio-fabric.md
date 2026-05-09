@@ -1,9 +1,10 @@
-# UIO Fabric
+# axi-linux-uio Topology
 
-The UIO fabric runs the virtio backend daemon inside a second Linux guest and
-uses Linux UIO interrupts instead of a host socket backend. This gives the
-backend a guest-visible MMIO window and a DMA mapping of the frontend guest RAM,
-while keeping the backend event loop interrupt-driven.
+The `axi-linux-uio` topology runs the virtio backend daemon inside a second Linux
+guest and uses Linux UIO for backend MMIO, DMA, and notification access. It still
+uses QEMU's custom `axi` device on both frontend and backend QEMU processes. The
+Unix socket in this topology is a QEMU-to-QEMU control socket only; payload DMA
+does not travel over that socket.
 
 ## Topology
 
@@ -134,7 +135,7 @@ frontends.
 
 ## Test And Benchmark Entry Points
 
-The x64 test and benchmark scripts exercise the UIO fabric:
+The x64 test and benchmark scripts exercise the `axi-linux-uio` topology:
 
 ```sh
 tests/run-tests.sh
@@ -142,7 +143,7 @@ tests/run-benchmark.sh
 ```
 
 Both scripts call `nix run .#runuio-x64`, which builds backend daemons with
-`CHIPLETS_BACKEND_FABRIC=uio`, packages them into a temporary initrd with
+`CHIPLETS_BACKEND_FABRIC=linux-uio`, packages them into a temporary initrd with
 `chiplets_uio.ko`, and launches the two-VM orchestrator in
 `scripts/chiplets-uio-x64.py`.
 
@@ -167,8 +168,9 @@ The ARM64 benchmark wrapper is:
 tests/run-benchmark-a64.sh
 ```
 
-The benchmark defaults to a small `1MiB` transfer because the current UIO path is
-functional but slow; larger transfers can be requested with `BENCH_SIZE_MB`.
+The benchmark defaults to a small `1MiB` transfer because the current
+`axi-linux-uio` path is functional but slow; larger transfers can be requested
+with `BENCH_SIZE_MB`.
 Set `BENCH_REPEAT` to run the write/read benchmark multiple times within the
 same VM pair and print min/average/max throughput summaries:
 

@@ -14,19 +14,19 @@ if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
 endif()
 
 option(CHIPLETS_FETCH_QEMU "Fetch QEMU source and enable the configured QEMU target" OFF)
-set(CHIPLETS_BACKEND_FABRIC "axi" CACHE STRING "Backend fabric implementation: axi, devmem, or uio")
-set_property(CACHE CHIPLETS_BACKEND_FABRIC PROPERTY STRINGS axi devmem uio)
+set(CHIPLETS_BACKEND_FABRIC "qemu-socket" CACHE STRING "Backend fabric implementation: qemu-socket, linux-devmem, or linux-uio")
+set_property(CACHE CHIPLETS_BACKEND_FABRIC PROPERTY STRINGS qemu-socket linux-devmem linux-uio axi devmem uio)
 set(CHIPLETS_QEMU_TARGET_FILE "${CMAKE_SOURCE_DIR}/cmake/qemu-targets/x64-minimal.cmake"
     CACHE FILEPATH "QEMU target configuration file")
 
-if(CHIPLETS_BACKEND_FABRIC STREQUAL "axi")
-  set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/axi.c)
-elseif(CHIPLETS_BACKEND_FABRIC STREQUAL "devmem")
-  set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/devmem.c)
-elseif(CHIPLETS_BACKEND_FABRIC STREQUAL "uio")
-  set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/uio.c)
+if(CHIPLETS_BACKEND_FABRIC STREQUAL "qemu-socket" OR CHIPLETS_BACKEND_FABRIC STREQUAL "axi")
+  set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/qemu_socket.c)
+elseif(CHIPLETS_BACKEND_FABRIC STREQUAL "linux-devmem" OR CHIPLETS_BACKEND_FABRIC STREQUAL "devmem")
+  set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/linux_devmem.c)
+elseif(CHIPLETS_BACKEND_FABRIC STREQUAL "linux-uio" OR CHIPLETS_BACKEND_FABRIC STREQUAL "uio")
+  set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/linux_uio.c)
 else()
-  message(FATAL_ERROR "CHIPLETS_BACKEND_FABRIC must be one of: axi, devmem, uio")
+  message(FATAL_ERROR "CHIPLETS_BACKEND_FABRIC must be one of: qemu-socket, linux-devmem, linux-uio")
 endif()
 
 FetchContent_Declare(

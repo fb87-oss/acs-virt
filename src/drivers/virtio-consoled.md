@@ -6,7 +6,7 @@ It combines three layers that are deployed as one daemon binary:
 
 - console output backend operations
 - transport-independent virtio-console device semantics
-- the current `axi` plus `virtio-mmio` binding used by QEMU
+- the selected backend fabric plus `virtio-mmio` binding used by QEMU/UIO
 
 Console backend responsibilities:
 
@@ -30,7 +30,8 @@ Fabric and MMIO binding responsibilities:
 
 - create a `struct virtio_mmio` transport over the `struct virtio_device`
 - register a `struct fabric_device` with a 0x200-byte MMIO aperture
-- route `axi` MMIO reads and writes through `virtio_mmio_read` and `virtio_mmio_write`
+- route fabric MMIO reads and writes through `virtio_mmio_read` and
+  `virtio_mmio_write`
 - lower the external interrupt line on device reset and interrupt acknowledgement
 - dispatch `VIRTIO_MMIO_QUEUE_NOTIFY` to the virtio-console queue handler
 
@@ -39,11 +40,12 @@ Daemon responsibilities:
 - parse launcher-provided `key=value` arguments
 - require `socket`
 - accept optional `output` and `ram_access` values
-- start the `axi` socket loop for this one device
+- start the selected fabric loop for this one device
 
 Important boundaries:
 
-- QEMU owns guest RAM and services DMA requests; this daemon asks for DMA through `fabric_dma_*`
+- QEMU or the selected Linux fabric exposes guest RAM; this daemon accesses it
+  only through `fabric_dma_*`
 - `virtio-mmio.c` owns register-level transport state; this file only binds notify and IRQ side effects
 - `virtio.c` owns generic split-ring helpers; this file owns console-specific queue behavior
 - Linux guest drivers remain unchanged and see a normal virtio-mmio console device

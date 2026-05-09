@@ -11,5 +11,5 @@ fi
 
 cmake -S "$root_dir" -B "$cmake_build_dir" -G Ninja \
   -DCHIPLETS_FETCH_QEMU=OFF \
-  -DCHIPLETS_BACKEND_FABRIC="${CHIPLETS_BACKEND_FABRIC:-axi}"
+  -DCHIPLETS_BACKEND_FABRIC="${CHIPLETS_BACKEND_FABRIC:-qemu-socket}"
 cmake --build "$cmake_build_dir" --target virtio-blkd virtio-consoled c-backend-tests --parallel

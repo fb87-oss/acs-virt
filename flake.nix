@@ -113,7 +113,7 @@
     runuio-x64 = pkgs.writeShellScriptBin "runuio-x64" ''
       set -euo pipefail
 
-      CHIPLETS_BACKEND_FABRIC=uio CMAKE_BUILD_DIR=build/cmake-uio "$PWD/scripts/build-tools.sh"
+      CHIPLETS_BACKEND_FABRIC=linux-uio CMAKE_BUILD_DIR=build/cmake-uio "$PWD/scripts/build-tools.sh"
 
       tmp=$(${pkgs.coreutils}/bin/mktemp -d "''${TMPDIR:-/tmp}/chiplets-uio-initrd.XXXXXX")
       cleanup() {
@@ -184,7 +184,7 @@ EOF
       ${pkgs.cmake}/bin/cmake -S "$PWD" -B "$build_dir" -G Ninja \
         -DCMAKE_MAKE_PROGRAM=${pkgs.ninja}/bin/ninja \
         -DCHIPLETS_FETCH_QEMU=OFF \
-        -DCHIPLETS_BACKEND_FABRIC=uio \
+        -DCHIPLETS_BACKEND_FABRIC=linux-uio \
         -DCMAKE_SYSTEM_NAME=Linux \
         -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
         -DCMAKE_C_COMPILER=${pkgsCrossArm64.stdenv.cc}/bin/aarch64-unknown-linux-gnu-gcc \
