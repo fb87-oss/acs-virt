@@ -122,6 +122,8 @@ static uint64_t get_config(void *opaque, uint64_t offset, uint32_t len) {
         return 80;
     case offsetof(struct virtio_console_config, rows):
         return 25;
+    case offsetof(struct virtio_console_config, max_nr_ports):
+        return 1;
     default:
         return 0;
     }

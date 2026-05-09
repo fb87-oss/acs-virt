@@ -61,7 +61,7 @@ new file mode 100644
 index 0000000000..14521bdf7f
 --- /dev/null
 +++ b/hw/misc/axi.c
-@@ -0,0 +1,504 @@
+@@ -0,0 +1,811 @@
 +/*
 + * Emulated AXI fabric proxy device.
 + *
@@ -84,14 +84,29 @@ index 0000000000..14521bdf7f
 +#include "hw/sysbus.h"
 +#include "qemu/error-report.h"
 +#include "qemu/log.h"
++#include "qemu/main-loop.h"
 +#include "qemu/module.h"
 +#include "qom/object.h"
++#include "system/hostmem.h"
++#include <linux/virtio_mmio.h>
 +#include <sys/socket.h>
 +#include <sys/un.h>
 +#include <unistd.h>
 +
 +#define TYPE_AXI "axi"
 +OBJECT_DECLARE_SIMPLE_TYPE(AxiState, AXI)
++
++#define AXI_CONTROL_IRQ_OFFSET 0x200
++
++typedef enum AxiMode {
++    AXI_MODE_SOCKET,
++    AXI_MODE_UIO,
++} AxiMode;
++
++typedef enum AxiRole {
++    AXI_ROLE_FRONTEND,
++    AXI_ROLE_BACKEND,
++} AxiRole;
 +
 +typedef enum AxiRamAccess {
 +    AXI_RAM_ACCESS_SHARED_MEM,
@@ -109,6 +124,9 @@ index 0000000000..14521bdf7f
 +    AXI_MSG_DMA_READ = 8,
 +    AXI_MSG_DMA_READ_REPLY = 9,
 +    AXI_MSG_DMA_WRITE = 10,
++    AXI_MSG_FRONTEND_NOTIFY = 100,
++    AXI_MSG_FRONTEND_IRQ_ASSERT = 101,
++    AXI_MSG_FRONTEND_IRQ_DEASSERT = 102,
 +    AXI_MSG_ERROR = 0xffff,
 +} AxiMsgKind;
 +
@@ -124,17 +142,33 @@ index 0000000000..14521bdf7f
 +    SysBusDevice parent_obj;
 +
 +    MemoryRegion mmio;
++    MemoryRegion dma_alias;
++    HostMemoryBackend *hostmem;
++    HostMemoryBackend *dma_memdev;
++    uint8_t *shared_mmio;
 +    uint64_t base;
 +    uint64_t size;
++    uint64_t dma_base;
++    uint64_t dma_size;
 +    uint32_t irq_num;
 +    char *socket_path;
++    char *mode;
++    char *role;
++    char *control_socket_path;
 +    char *ram_access;
 +    char *target;
++    AxiMode mode_value;
++    AxiRole role_value;
 +    AxiRamAccess ram_access_mode;
 +    int sockfd;
++    int listen_fd;
++    int control_fd;
 +    bool socket_error_reported;
++    bool virtio_node;
 +    qemu_irq irq;
 +};
++
++static bool axi_control_send(AxiState *s, AxiMsgKind kind);
 +
 +static bool axi_io_all(int fd, void *buf, size_t len, bool is_write)
 +{
@@ -173,6 +207,134 @@ index 0000000000..14521bdf7f
 +        close(s->sockfd);
 +        s->sockfd = -1;
 +    }
++}
++
++static void axi_control_close(AxiState *s)
++{
++    if (s->control_fd >= 0) {
++        qemu_set_fd_handler(s->control_fd, NULL, NULL, NULL);
++        close(s->control_fd);
++        s->control_fd = -1;
++    }
++}
++
++static void axi_control_read(void *opaque)
++{
++    AxiState *s = opaque;
++    AxiMsgHeader hdr;
++
++    if (!axi_io_all(s->control_fd, &hdr, sizeof(hdr), false)) {
++        axi_control_close(s);
++        return;
++    }
++
++    switch (hdr.kind) {
++    case AXI_MSG_FRONTEND_NOTIFY:
++        if (s->irq) {
++            qemu_set_irq(s->irq, 1);
++            g_usleep(1000);
++            qemu_set_irq(s->irq, 0);
++        }
++        break;
++    case AXI_MSG_FRONTEND_IRQ_ASSERT:
++        if (s->irq) {
++            qemu_set_irq(s->irq, 1);
++        }
++        break;
++    case AXI_MSG_FRONTEND_IRQ_DEASSERT:
++        if (s->irq) {
++            qemu_set_irq(s->irq, 0);
++        }
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: unsupported control message kind=%u\n", TYPE_AXI,
++                      hdr.kind);
++        break;
++    }
++}
++
++static void axi_control_accept(void *opaque)
++{
++    AxiState *s = opaque;
++    int fd = accept(s->listen_fd, NULL, NULL);
++
++    if (fd < 0) {
++        return;
++    }
++    axi_control_close(s);
++    s->control_fd = fd;
++    qemu_set_fd_handler(s->control_fd, axi_control_read, NULL, s);
++}
++
++static bool axi_control_listen(AxiState *s, Error **errp)
++{
++    struct sockaddr_un addr;
++
++    s->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (s->listen_fd < 0) {
++        error_setg_errno(errp, errno, "axi cannot create control socket");
++        return false;
++    }
++    unlink(s->control_socket_path);
++    memset(&addr, 0, sizeof(addr));
++    addr.sun_family = AF_UNIX;
++    if (g_strlcpy(addr.sun_path, s->control_socket_path, sizeof(addr.sun_path)) >=
++        sizeof(addr.sun_path)) {
++        error_setg(errp, "axi control socket path too long: %s", s->control_socket_path);
++        return false;
++    }
++    if (bind(s->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
++        listen(s->listen_fd, 1) < 0) {
++        error_setg_errno(errp, errno, "axi cannot listen on control socket");
++        return false;
++    }
++    qemu_set_fd_handler(s->listen_fd, axi_control_accept, NULL, s);
++    return true;
++}
++
++static bool axi_control_connect(AxiState *s, Error **errp)
++{
++    struct sockaddr_un addr;
++
++    s->control_fd = socket(AF_UNIX, SOCK_STREAM, 0);
++    if (s->control_fd < 0) {
++        error_setg_errno(errp, errno, "axi cannot create control socket");
++        return false;
++    }
++    memset(&addr, 0, sizeof(addr));
++    addr.sun_family = AF_UNIX;
++    if (g_strlcpy(addr.sun_path, s->control_socket_path, sizeof(addr.sun_path)) >=
++        sizeof(addr.sun_path)) {
++        error_setg(errp, "axi control socket path too long: %s", s->control_socket_path);
++        return false;
++    }
++    if (connect(s->control_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
++        error_setg_errno(errp, errno, "axi cannot connect control socket");
++        return false;
++    }
++    qemu_set_fd_handler(s->control_fd, axi_control_read, NULL, s);
++    return true;
++}
++
++static bool axi_control_send(AxiState *s, AxiMsgKind kind)
++{
++    AxiMsgHeader hdr = {
++        .kind = kind,
++        .flags = 0,
++        .window_id = 0,
++        .offset = 0,
++        .length = 0,
++    };
++
++    if (s->control_fd < 0) {
++        return false;
++    }
++    if (!axi_io_all(s->control_fd, &hdr, sizeof(hdr), true)) {
++        axi_control_close(s);
++        return false;
++    }
++    return true;
 +}
 +
 +static bool axi_connect(AxiState *s)
@@ -386,6 +548,59 @@ index 0000000000..14521bdf7f
 +    axi_service_backend(s);
 +}
 +
++static uint64_t axi_uio_read(void *opaque, hwaddr addr, unsigned size)
++{
++    AxiState *s = opaque;
++    uint64_t value = 0;
++
++    if (addr + size > s->size) {
++        return 0;
++    }
++    if (s->role_value == AXI_ROLE_FRONTEND) {
++        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
++        g_usleep(10000);
++    }
++    memcpy(&value, s->shared_mmio + addr, size);
++    return value;
++}
++
++static void axi_uio_write(void *opaque, hwaddr addr, uint64_t value,
++                          unsigned size)
++{
++    AxiState *s = opaque;
++
++    if (addr + size > s->size) {
++        return;
++    }
++    memcpy(s->shared_mmio + addr, &value, size);
++
++    if (s->role_value == AXI_ROLE_FRONTEND &&
++        addr == VIRTIO_MMIO_QUEUE_SEL) {
++        static const hwaddr queue_offsets[] = {
++            VIRTIO_MMIO_QUEUE_NUM,        VIRTIO_MMIO_QUEUE_READY,
++            VIRTIO_MMIO_QUEUE_DESC_LOW,   VIRTIO_MMIO_QUEUE_DESC_HIGH,
++            VIRTIO_MMIO_QUEUE_AVAIL_LOW,  VIRTIO_MMIO_QUEUE_AVAIL_HIGH,
++            VIRTIO_MMIO_QUEUE_USED_LOW,   VIRTIO_MMIO_QUEUE_USED_HIGH,
++        };
++        uint32_t zero = 0;
++
++        for (size_t i = 0; i < G_N_ELEMENTS(queue_offsets); i++) {
++            if (queue_offsets[i] + sizeof(zero) <= s->size) {
++                memcpy(s->shared_mmio + queue_offsets[i], &zero, sizeof(zero));
++            }
++        }
++    }
++
++    if (s->role_value == AXI_ROLE_FRONTEND) {
++        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
++        g_usleep(10000);
++    } else if (s->role_value == AXI_ROLE_BACKEND &&
++               addr == AXI_CONTROL_IRQ_OFFSET) {
++        axi_control_send(s, value ? AXI_MSG_FRONTEND_IRQ_ASSERT
++                                  : AXI_MSG_FRONTEND_IRQ_DEASSERT);
++    }
++}
++
 +static const MemoryRegionOps axi_ops = {
 +    .read = axi_read,
 +    .write = axi_write,
@@ -395,6 +610,41 @@ index 0000000000..14521bdf7f
 +    .impl.min_access_size = 1,
 +    .impl.max_access_size = 8,
 +};
++
++static const MemoryRegionOps axi_uio_ops = {
++    .read = axi_uio_read,
++    .write = axi_uio_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid.min_access_size = 1,
++    .valid.max_access_size = 8,
++    .impl.min_access_size = 1,
++    .impl.max_access_size = 8,
++};
++
++static bool axi_parse_mode(AxiState *s, Error **errp)
++{
++    const char *mode = s->mode ?: "socket";
++    const char *role = s->role ?: "frontend";
++
++    if (!g_strcmp0(mode, "socket")) {
++        s->mode_value = AXI_MODE_SOCKET;
++    } else if (!g_strcmp0(mode, "uio")) {
++        s->mode_value = AXI_MODE_UIO;
++    } else {
++        error_setg(errp, "invalid axi mode '%s'", mode);
++        return false;
++    }
++
++    if (!g_strcmp0(role, "frontend")) {
++        s->role_value = AXI_ROLE_FRONTEND;
++    } else if (!g_strcmp0(role, "backend")) {
++        s->role_value = AXI_ROLE_BACKEND;
++    } else {
++        error_setg(errp, "invalid axi role '%s'", role);
++        return false;
++    }
++    return true;
++}
 +
 +static bool axi_parse_ram_access(AxiState *s, Error **errp)
 +{
@@ -449,7 +699,7 @@ index 0000000000..14521bdf7f
 +    MachineState *ms = MACHINE(vms);
 +    g_autofree char *nodename = NULL;
 +
-+    if (!ms->fdt) {
++    if (!s->virtio_node || !ms->fdt) {
 +        return;
 +    }
 +
@@ -488,6 +738,8 @@ index 0000000000..14521bdf7f
 +{
 +    AxiState *s = AXI(dev);
 +    s->sockfd = -1;
++    s->listen_fd = -1;
++    s->control_fd = -1;
 +
 +    if (!s->base) {
 +        error_setg(errp, "base property is required");
@@ -499,9 +751,25 @@ index 0000000000..14521bdf7f
 +        return;
 +    }
 +
-+    if (!s->socket_path || !s->socket_path[0]) {
++    if (!axi_parse_mode(s, errp)) {
++        return;
++    }
++
++    if (s->mode_value == AXI_MODE_SOCKET &&
++        (!s->socket_path || !s->socket_path[0])) {
 +        error_setg(errp, "socket property is required");
 +        return;
++    }
++
++    if (s->mode_value == AXI_MODE_UIO) {
++        if (!s->hostmem) {
++            error_setg(errp, "axi uio mode requires memdev");
++            return;
++        }
++        if (!s->control_socket_path || !s->control_socket_path[0]) {
++            error_setg(errp, "axi uio mode requires control-socket");
++            return;
++        }
 +    }
 +
 +    if (!axi_parse_ram_access(s, errp)) {
@@ -518,9 +786,38 @@ index 0000000000..14521bdf7f
 +        return;
 +    }
 +
-+    memory_region_init_io(&s->mmio, OBJECT(dev), &axi_ops, s,
-+                          TYPE_AXI, s->size);
++    if (s->mode_value == AXI_MODE_UIO) {
++        MemoryRegion *host_mr = host_memory_backend_get_memory(s->hostmem);
++        uint64_t host_size = memory_region_size(host_mr);
++
++        if (host_size < s->size) {
++            error_setg(errp, "axi memdev too small: 0x%" PRIx64 " < 0x%" PRIx64,
++                       host_size, s->size);
++            return;
++        }
++        s->shared_mmio = memory_region_get_ram_ptr(host_mr);
++        memory_region_init_io(&s->mmio, OBJECT(dev), &axi_uio_ops, s,
++                              TYPE_AXI, s->size);
++        if (s->role_value == AXI_ROLE_FRONTEND) {
++            if (!axi_control_listen(s, errp)) {
++                return;
++            }
++        } else if (!axi_control_connect(s, errp)) {
++            return;
++        }
++    } else {
++        memory_region_init_io(&s->mmio, OBJECT(dev), &axi_ops, s,
++                              TYPE_AXI, s->size);
++    }
 +    memory_region_add_subregion(get_system_memory(), s->base, &s->mmio);
++
++    if (s->mode_value == AXI_MODE_UIO && s->dma_memdev && s->dma_size) {
++        MemoryRegion *dma_mr = host_memory_backend_get_memory(s->dma_memdev);
++        memory_region_init_alias(&s->dma_alias, OBJECT(dev), "axi-dma", dma_mr,
++                                 0, s->dma_size);
++        memory_region_add_subregion(get_system_memory(), s->dma_base,
++                                    &s->dma_alias);
++    }
 +
 +    warn_report("%s: mapped 0x%" PRIx64 " bytes at 0x%" PRIx64
 +                ", irq=%u, socket=%s, ram-access=%s, target=%s; "
@@ -537,10 +834,20 @@ index 0000000000..14521bdf7f
 +static const Property axi_properties[] = {
 +    DEFINE_PROP_UINT64("base", AxiState, base, 0),
 +    DEFINE_PROP_UINT64("size", AxiState, size, 0),
++    DEFINE_PROP_UINT64("dma-base", AxiState, dma_base, 0),
++    DEFINE_PROP_UINT64("dma-size", AxiState, dma_size, 0),
 +    DEFINE_PROP_UINT32("irq", AxiState, irq_num, 0),
 +    DEFINE_PROP_STRING("socket", AxiState, socket_path),
++    DEFINE_PROP_STRING("mode", AxiState, mode),
++    DEFINE_PROP_STRING("role", AxiState, role),
++    DEFINE_PROP_STRING("control-socket", AxiState, control_socket_path),
 +    DEFINE_PROP_STRING("ram-access", AxiState, ram_access),
 +    DEFINE_PROP_STRING("target", AxiState, target),
++    DEFINE_PROP_LINK("memdev", AxiState, hostmem, TYPE_MEMORY_BACKEND,
++                     HostMemoryBackend *),
++    DEFINE_PROP_LINK("dma-memdev", AxiState, dma_memdev, TYPE_MEMORY_BACKEND,
++                     HostMemoryBackend *),
++    DEFINE_PROP_BOOL("virtio-node", AxiState, virtio_node, true),
 +};
 +
 +static void axi_class_init(ObjectClass *klass, const void *data)

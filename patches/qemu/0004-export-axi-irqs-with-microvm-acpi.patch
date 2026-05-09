@@ -1,10 +1,23 @@
 diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 --- a/hw/i386/acpi-microvm.c
 +++ b/hw/i386/acpi-microvm.c
-@@ -46,5 +46,24 @@
+@@ -46,5 +46,70 @@
  
  #include CONFIG_DEVICES
  
++static void axi_acpi_append_memory(Aml *crs, hwaddr base, hwaddr size)
++{
++    if (base <= UINT32_MAX && size <= UINT32_MAX) {
++        aml_append(crs, aml_memory32_fixed(base, size, AML_READ_WRITE));
++    } else {
++        aml_append(crs,
++                   aml_qword_memory(AML_POS_DECODE, AML_MIN_FIXED,
++                                    AML_MAX_FIXED, AML_NON_CACHEABLE,
++                                    AML_READ_WRITE, 0, base, base + size - 1,
++                                    0, size));
++    }
++}
++
 +static void axi_acpi_dsdt_add(Aml *scope, hwaddr base, hwaddr size,
 +                                  uint32_t irq, unsigned int index)
 +{
@@ -16,7 +29,7 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +    aml_append(dev, aml_name_decl("_CCA", aml_int(1)));
 +
 +    crs = aml_resource_template();
-+    aml_append(crs, aml_memory32_fixed(base, size, AML_READ_WRITE));
++    axi_acpi_append_memory(crs, base, size);
 +    aml_append(crs,
 +               aml_interrupt(AML_CONSUMER, AML_EDGE, AML_ACTIVE_HIGH,
 +                             AML_EXCLUSIVE, &irq, 1));
@@ -24,9 +37,42 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +    aml_append(scope, dev);
 +}
 +
++static void axi_acpi_uio_dsdt_add(Aml *scope, hwaddr base, hwaddr size,
++                                  hwaddr dma_base, hwaddr dma_size,
++                                  uint32_t irq, unsigned int index)
++{
++    Aml *dev = aml_device("AU%02u", index);
++    Aml *crs;
++    Aml *uuid = aml_touuid("DAFFD814-6EBA-4D8C-8A91-BC9BBF4AA301");
++    Aml *compatible = aml_package(2);
++    Aml *props = aml_package(1);
++    Aml *dsd = aml_package(2);
++
++    aml_append(dev, aml_name_decl("_HID", aml_string("PRP0001")));
++    aml_append(dev, aml_name_decl("_UID", aml_int(index)));
++    aml_append(dev, aml_name_decl("_CCA", aml_int(1)));
++
++    crs = aml_resource_template();
++    axi_acpi_append_memory(crs, base, size);
++    if (dma_size) {
++        axi_acpi_append_memory(crs, dma_base, dma_size);
++    }
++    aml_append(crs,
++               aml_interrupt(AML_CONSUMER, AML_EDGE, AML_ACTIVE_HIGH,
++                             AML_EXCLUSIVE, &irq, 1));
++    aml_append(dev, aml_name_decl("_CRS", crs));
++
++    aml_append(compatible, aml_string("compatible"));
++    aml_append(compatible, aml_string("generic-uio"));
++    aml_append(props, compatible);
++    aml_append(dsd, uuid);
++    aml_append(dsd, props);
++    aml_append(dev, aml_name_decl("_DSD", dsd));
++    aml_append(scope, dev);
++}
  static void acpi_dsdt_add_virtio(Aml *scope,
                                   MicrovmMachineState *mms)
-@@ -51,6 +70,7 @@ static void acpi_dsdt_add_virtio(Aml *scope,
+@@ -51,6 +116,7 @@ static void acpi_dsdt_add_virtio(Aml *scope,
  {
      gchar *separator;
      long int index;
@@ -34,11 +80,10 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
      BusState *bus;
      BusChild *kid;
  
-@@ -81,6 +101,36 @@ static void acpi_dsdt_add_virtio(Aml *scope,
+@@ -81,6 +147,66 @@ static void acpi_dsdt_add_virtio(Aml *scope,
              virtio_acpi_dsdt_add(scope, base, size, irq, index, 1);
          }
      }
-+
 +    for (axi_irq = MICROVM_AXI_IRQ_BASE;
 +         axi_irq < MICROVM_AXI_IRQ_BASE + MICROVM_AXI_IRQ_COUNT;
 +         axi_irq++) {
@@ -46,8 +91,13 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +            Object *obj = object_dynamic_cast(OBJECT(kid->child), "axi");
 +            g_autoptr(Error) err = NULL;
 +            uint64_t base;
++            uint64_t dma_base;
++            uint64_t dma_size;
 +            uint64_t size;
 +            uint32_t irq;
++            bool virtio_node;
++            g_autofree char *role = NULL;
++            g_autofree char *mode = NULL;
 +
 +            if (!obj) {
 +                continue;
@@ -65,7 +115,33 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +            if (err) {
 +                continue;
 +            }
-+            axi_acpi_dsdt_add(scope, base, size, irq, irq);
++            virtio_node = object_property_get_bool(obj, "virtio-node", &err);
++            if (!err && virtio_node) {
++                axi_acpi_dsdt_add(scope, base, size, irq, irq);
++                continue;
++            }
++            err = NULL;
++            mode = object_property_get_str(obj, "mode", &err);
++            if (err || g_strcmp0(mode, "uio")) {
++                continue;
++            }
++            err = NULL;
++            role = object_property_get_str(obj, "role", &err);
++            if (err || g_strcmp0(role, "backend")) {
++                continue;
++            }
++            err = NULL;
++            dma_base = object_property_get_uint(obj, "dma-base", &err);
++            if (err) {
++                dma_base = 0;
++            }
++            err = NULL;
++            dma_size = object_property_get_uint(obj, "dma-size", &err);
++            if (err) {
++                dma_size = 0;
++            }
++            axi_acpi_uio_dsdt_add(scope, base, size, dma_base, dma_size,
++                                  irq, irq);
 +        }
 +    }
  }

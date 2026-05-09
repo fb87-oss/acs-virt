@@ -12,8 +12,8 @@ set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/out)
 
 option(CHIPLETS_FETCH_QEMU "Fetch QEMU source and enable the configured QEMU target" OFF)
-set(CHIPLETS_BACKEND_FABRIC "axi" CACHE STRING "Backend fabric implementation: axi or devmem")
-set_property(CACHE CHIPLETS_BACKEND_FABRIC PROPERTY STRINGS axi devmem)
+set(CHIPLETS_BACKEND_FABRIC "axi" CACHE STRING "Backend fabric implementation: axi, devmem, or uio")
+set_property(CACHE CHIPLETS_BACKEND_FABRIC PROPERTY STRINGS axi devmem uio)
 set(CHIPLETS_QEMU_TARGET_FILE "${CMAKE_SOURCE_DIR}/cmake/qemu-targets/x64-minimal.cmake"
     CACHE FILEPATH "QEMU target configuration file")
 
@@ -21,8 +21,10 @@ if(CHIPLETS_BACKEND_FABRIC STREQUAL "axi")
   set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/axi.c)
 elseif(CHIPLETS_BACKEND_FABRIC STREQUAL "devmem")
   set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/devmem.c)
+elseif(CHIPLETS_BACKEND_FABRIC STREQUAL "uio")
+  set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/uio.c)
 else()
-  message(FATAL_ERROR "CHIPLETS_BACKEND_FABRIC must be one of: axi, devmem")
+  message(FATAL_ERROR "CHIPLETS_BACKEND_FABRIC must be one of: axi, devmem, uio")
 endif()
 
 FetchContent_Declare(

@@ -25,9 +25,17 @@
 
       # Some kernels build virtio pieces in; modular kernels may need dependency
       # retries because this tiny initrd does not run full modprobe.
+      for module in virtio virtio_ring virtio_mmio virtio_blk virtio_console uio; do
+        modprobe "$module" 2>/dev/null || true
+      done
+
       for pass in 1 2 3; do
         while read -r i; do
-          [ -e "/$i" ] && insmod "/$i" 2>/dev/null || true
+          if [ -e "/$i" ]; then
+            case "$i" in
+              *) insmod "/$i" 2>/dev/null || true ;;
+            esac
+          fi
         done < /modules.txt
       done
 
@@ -44,7 +52,7 @@
       cp -rf ${build-initrc modules} initrd/etc/init.d/rcS
       rsync -av ${busybox}/* initrd/
 
-      # copy all the virtio kernel modules
+      # copy virtio and UIO kernel modules used by frontend/backend guests
       root="$PWD/initrd"
       copy_module() {
         dst=$root/${modules}/''${1%.xz}
@@ -54,8 +62,15 @@
       }
 
       ( cd ${kernel.modules}/${modules};
-        for i in $(find . -name "virtio*.ko.xz"); do
-          copy_module "$i"
+        for name in \
+          virtio.ko.xz \
+          virtio_ring.ko.xz \
+          virtio_mmio.ko.xz \
+          virtio_blk.ko.xz \
+          virtio_console.ko.xz \
+          uio.ko.xz; do
+          path=$(find . -name "$name" -print -quit)
+          [ -n "$path" ] && copy_module "$path"
         done
       )
 
@@ -91,11 +106,71 @@
 
     runvm-x64 = runvm pkgs.linuxPackages_latest.kernel pkgs.pkgsStatic.busybox;
     runvm-a64 = runvm pkgsArm64.linuxPackages_latest.kernel pkgsArm64.pkgsStatic.busybox;
+    runuio-x64 = pkgs.writeShellScriptBin "runuio-x64" ''
+      set -euo pipefail
+
+      CHIPLETS_BACKEND_FABRIC=uio CMAKE_BUILD_DIR=build/cmake-uio "$PWD/scripts/build-tools.sh"
+
+      tmp=$(${pkgs.coreutils}/bin/mktemp -d "''${TMPDIR:-/tmp}/chiplets-uio-initrd.XXXXXX")
+      cleanup() {
+        ${pkgs.coreutils}/bin/chmod -R u+w "$tmp" 2>/dev/null || true
+        ${pkgs.coreutils}/bin/rm -rf "$tmp"
+      }
+      trap cleanup EXIT
+
+      ${pkgs.gzip}/bin/gzip -dc ${build-initrd pkgs.linuxPackages_latest.kernel pkgs.pkgsStatic.busybox "lib/modules/${pkgs.linuxPackages_latest.kernel.modDirVersion}/kernel" } |
+        (cd "$tmp" && ${pkgs.cpio}/bin/cpio -id --quiet)
+      ${pkgs.coreutils}/bin/chmod -R u+w "$tmp"
+
+      module_build="$tmp/chiplets-uio-module"
+      ${pkgs.coreutils}/bin/mkdir -p "$module_build"
+      ${pkgs.coreutils}/bin/cp "$PWD/src/kernel/chiplets_uio.c" "$module_build/chiplets_uio.c"
+      cat > "$module_build/Makefile" <<'EOF'
+obj-m += chiplets_uio.o
+EOF
+      PATH=${pkgs.gcc}/bin:${pkgs.gnumake}/bin:${pkgs.binutils}/bin:${pkgs.perl}/bin:${pkgs.bash}/bin:${pkgs.coreutils}/bin:$PATH \
+        ${pkgs.gnumake}/bin/make -s -C ${pkgs.linuxPackages_latest.kernel.dev}/lib/modules/${pkgs.linuxPackages_latest.kernel.modDirVersion}/build M="$module_build" modules
+      module_dst="lib/modules/${pkgs.linuxPackages_latest.kernel.modDirVersion}/kernel/drivers/uio/chiplets_uio.ko"
+      ${pkgs.coreutils}/bin/mkdir -p "$tmp/$(${pkgs.coreutils}/bin/dirname "$module_dst")"
+      ${pkgs.coreutils}/bin/cp "$module_build/chiplets_uio.ko" "$tmp/$module_dst"
+      printf '%s\n' "$module_dst" >> "$tmp/modules.txt"
+
+      ${pkgs.coreutils}/bin/mkdir -p "$tmp/bin"
+      ${pkgs.coreutils}/bin/cp "$PWD/out/virtio-blkd" "$tmp/bin/virtio-blkd"
+      ${pkgs.coreutils}/bin/cp "$PWD/out/virtio-consoled" "$tmp/bin/virtio-consoled"
+
+      copy_deps() {
+        local bin=$1
+        ${pkgs.glibc.bin}/bin/ldd "$bin" | while read -r a b c rest; do
+          for path in "$a" "$b" "$c" $rest; do
+            [ "''${path#/}" != "$path" ] || continue
+            [ -e "$path" ] || continue
+            ${pkgs.coreutils}/bin/mkdir -p "$tmp/$(${pkgs.coreutils}/bin/dirname "$path")"
+            ${pkgs.coreutils}/bin/chmod u+w "$tmp/$(${pkgs.coreutils}/bin/dirname "$path")" 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod u+w "$tmp/$path" 2>/dev/null || true
+            ${pkgs.coreutils}/bin/cp -f -L "$path" "$tmp/$path"
+          done
+        done
+      }
+      copy_deps "$PWD/out/virtio-blkd"
+      copy_deps "$PWD/out/virtio-consoled"
+
+      initrd="$tmp/uio-initrd.gz"
+      (cd "$tmp" && ${pkgs.findutils}/bin/find . -print0 |
+        ${pkgs.cpio}/bin/cpio --null -ov --owner=0:0 --format=newc |
+        ${pkgs.gzip}/bin/gzip -9 > "$initrd") >/dev/null 2>&1
+
+      exec ${pkgs.python3}/bin/python3 "$PWD/scripts/chiplets-uio-x64.py" \
+        --kernel ${pkgs.linuxPackages_latest.kernel}/bzImage \
+        --initrd "$initrd" \
+        "$@"
+    '';
   in
   {
 
     packages.x86_64-linux.runvm-x64 = runvm-x64;
     packages.x86_64-linux.runvm-a64 = runvm-a64;
+    packages.x86_64-linux.runuio-x64 = runuio-x64;
     packages.x86_64-linux.x64 = runvm-x64;
     packages.x86_64-linux.a64 = runvm-a64;
     packages.x86_64-linux.default = runvm-x64;
