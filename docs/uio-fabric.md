@@ -170,6 +170,16 @@ tests/run-benchmark-a64.sh
 The benchmark defaults to a small `1MiB` transfer because the current UIO path is
 functional but slow; larger transfers can be requested with `BENCH_SIZE_MB`.
 
+Backend request timing can be enabled for benchmark runs with
+`CHIPLETS_PROFILE_BACKEND=1`. The orchestrator passes
+`CHIPLETS_BLKD_PROFILE=1` into `virtio-blkd` and reports average per-request
+time spent in descriptor-chain processing, guest DMA, image I/O, used-ring
+updates, and frontend IRQ signaling:
+
+```sh
+CHIPLETS_PROFILE_BACKEND=1 BENCH_SIZE_MB=64 tests/run-benchmark.sh
+```
+
 ## Benchmark Records
 
 The `perf/uio-throughput` branch improved block request coalescing by advertising

@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -90,6 +91,42 @@ def extract_dd_result(log_text: str, start: str, end: str) -> str:
         if in_section and "copied" in line:
             result = line
     return result
+
+
+def extract_backend_profile(log_text: str) -> str:
+    totals = {
+        "requests": 0,
+        "chain_ns": 0,
+        "guest_dma_ns": 0,
+        "image_io_ns": 0,
+        "add_used_ns": 0,
+        "irq_ns": 0,
+    }
+
+    for line in log_text.splitlines():
+        match = re.search(
+            r"blkd: profile requests=(\d+) chain_ns=(\d+) "
+            r"guest_dma_ns=(\d+) image_io_ns=(\d+) "
+            r"add_used_ns=(\d+) irq_ns=(\d+)",
+            line,
+        )
+        if not match:
+            continue
+        for key, value in zip(totals, match.groups()):
+            totals[key] += int(value)
+
+    if not totals["requests"]:
+        return ""
+
+    request_count = totals["requests"]
+    return (
+        f"requests={request_count} "
+        f"chain_avg_us={totals['chain_ns'] / request_count / 1000:.1f} "
+        f"guest_dma_avg_us={totals['guest_dma_ns'] / request_count / 1000:.1f} "
+        f"image_io_avg_us={totals['image_io_ns'] / request_count / 1000:.1f} "
+        f"add_used_avg_us={totals['add_used_ns'] / request_count / 1000:.1f} "
+        f"irq_avg_us={totals['irq_ns'] / request_count / 1000:.1f}"
+    )
 
 
 def truncate(path: Path, size: int) -> None:
@@ -263,6 +300,8 @@ def main() -> int:
     include_console = frontend_arch != "a64" or args.mode != "benchmark"
     notify_delay_us = 25000 if frontend_arch == "a64" else 50000
     notify_ack = not (backend_arch == "a64" and frontend_arch == "x64")
+    profile_backend = os.environ.get("CHIPLETS_PROFILE_BACKEND") == "1"
+    blkd_prefix = "CHIPLETS_BLKD_PROFILE=1 " if profile_backend else ""
 
     frontend_ram = run_dir / "frontend.ram"
     backend_ram = run_dir / "backend.ram"
@@ -360,7 +399,7 @@ def main() -> int:
             backend_script = f"""
 while [ ! -e /dev/uio0 ] || [ ! -e /dev/uio1 ]; do mdev -s; sleep 1; done
 dd if=/dev/zero of=/blk0.img bs=1M count={image_size_mb}
-/bin/virtio-blkd 'name=blk0,socket={uio_blk_endpoint},image=/blk0.img,readonly=false,ram_access=shared-mem' &
+{blkd_prefix}/bin/virtio-blkd 'name=blk0,socket={uio_blk_endpoint},image=/blk0.img,readonly=false,ram_access=shared-mem' &
 /bin/virtio-consoled 'name=con0,socket={uio_con_endpoint},output=-,ram_access=shared-mem' &
 echo UIO_BACKEND_READY
 wait
@@ -369,7 +408,7 @@ wait
             backend_script = f"""
 while [ ! -e /dev/uio0 ]; do mdev -s; sleep 1; done
 dd if=/dev/zero of=/blk0.img bs=1M count={image_size_mb}
-/bin/virtio-blkd 'name=blk0,socket={uio_blk_endpoint},image=/blk0.img,readonly=false,ram_access=shared-mem' &
+{blkd_prefix}/bin/virtio-blkd 'name=blk0,socket={uio_blk_endpoint},image=/blk0.img,readonly=false,ram_access=shared-mem' &
 echo UIO_BACKEND_READY
 wait
 """
@@ -444,6 +483,9 @@ echo UIO_SMOKE_TEST_DONE
                   f"read={backend_text.count('request type=0')} "
                   f"write={backend_text.count('request type=1')} "
                   f"flush={backend_text.count('request type=4')}")
+            profile_summary = extract_backend_profile(backend_text)
+            if profile_summary:
+                print(f"  backend profile: {profile_summary}")
         else:
             print(f"{backend_config['description']} backend / "
                   f"{frontend_config['description']} frontend UIO smoke test passed")

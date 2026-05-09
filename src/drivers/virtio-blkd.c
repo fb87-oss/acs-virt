@@ -19,7 +19,53 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
+
+/** @brief Per-notification timing counters for optional backend profiling. */
+struct blkd_profile_sample {
+    uint32_t requests;
+    uint64_t chain_ns;
+    uint64_t guest_dma_ns;
+    uint64_t image_io_ns;
+    uint64_t add_used_ns;
+    uint64_t irq_ns;
+};
+
+/** @brief Returns monotonic time in nanoseconds for profiling. */
+static uint64_t monotonic_ns(void) {
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0) {
+        return 0;
+    }
+    return ((uint64_t)ts.tv_sec * 1000000000ull) + (uint64_t)ts.tv_nsec;
+}
+
+/** @brief Returns whether optional backend profiling is enabled. */
+static bool blkd_profile_enabled(void) {
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *value = getenv("CHIPLETS_BLKD_PROFILE");
+
+        enabled = value && strcmp(value, "0") ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+/** @brief Adds elapsed monotonic nanoseconds to a counter. */
+static void profile_add(uint64_t *counter, uint64_t start_ns) {
+    uint64_t end_ns;
+
+    if (!counter || !start_ns) {
+        return;
+    }
+    end_ns = monotonic_ns();
+    if (end_ns >= start_ns) {
+        *counter += end_ns - start_ns;
+    }
+}
 
 /**
  * @brief Reads exactly len bytes from a positioned file offset.
@@ -265,7 +311,8 @@ static bool ensure_io_buf(struct blkd_virtio_device *dev, uint32_t len) {
  * @return bool True on success, false on malformed descriptors or DMA failure.
  */
 static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
-                          uint16_t head, uint32_t *used_len) {
+                          uint16_t head, uint32_t *used_len,
+                          struct blkd_profile_sample *profile) {
     struct virtio_desc header_desc;
     struct virtio_desc status_desc;
     uint8_t header[16];
@@ -276,6 +323,7 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
     uint32_t data_len = 0;
     uint16_t index;
     uint32_t chain_seen = 0;
+    uint64_t chain_start_ns = profile ? monotonic_ns() : 0;
 
     fprintf(stderr, "blkd: read descriptor chain head=%u\n", head);
 
@@ -321,11 +369,26 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
             if (!(desc.flags & VRING_DESC_F_WRITE)) {
                 status = VIRTIO_BLK_S_IOERR;
             } else if (status == VIRTIO_BLK_S_OK) {
+                uint64_t io_start_ns = profile ? monotonic_ns() : 0;
+
                 if (!ensure_io_buf(dev, desc.len) ||
                     !blkd_block_read(dev->backend, offset + data_len,
-                                     dev->io_buf, desc.len) ||
-                    !fabric_dma_write(io, desc.addr, dev->io_buf, desc.len)) {
+                                     dev->io_buf, desc.len)) {
                     status = VIRTIO_BLK_S_IOERR;
+                } else {
+                    uint64_t dma_start_ns;
+
+                    if (profile) {
+                        profile_add(&profile->image_io_ns, io_start_ns);
+                    }
+                    dma_start_ns = profile ? monotonic_ns() : 0;
+                    if (!fabric_dma_write(io, desc.addr, dev->io_buf,
+                                          desc.len)) {
+                        status = VIRTIO_BLK_S_IOERR;
+                    }
+                    if (profile) {
+                        profile_add(&profile->guest_dma_ns, dma_start_ns);
+                    }
                 }
             }
             data_len += desc.len;
@@ -333,14 +396,24 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
             if (desc.flags & VRING_DESC_F_WRITE) {
                 status = VIRTIO_BLK_S_IOERR;
             } else if (status == VIRTIO_BLK_S_OK) {
+                uint64_t dma_start_ns = profile ? monotonic_ns() : 0;
+
                 if (!ensure_io_buf(dev, desc.len) ||
                     !fabric_dma_read_into(io, desc.addr, desc.len,
                                           dev->io_buf)) {
                     return false;
                 }
+                if (profile) {
+                    profile_add(&profile->guest_dma_ns, dma_start_ns);
+                }
+                uint64_t io_start_ns = profile ? monotonic_ns() : 0;
+
                 if (!blkd_block_write(dev->backend, offset + data_len,
                                       dev->io_buf, desc.len)) {
                     status = VIRTIO_BLK_S_IOERR;
+                }
+                if (profile) {
+                    profile_add(&profile->image_io_ns, io_start_ns);
                 }
             }
             data_len += desc.len;
@@ -358,6 +431,10 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
             request_type, sector, data_len, status);
 
     *used_len = request_type == VIRTIO_BLK_T_IN ? data_len + 1 : 1;
+    if (profile) {
+        profile->requests++;
+        profile_add(&profile->chain_ns, chain_start_ns);
+    }
     return fabric_dma_write(io, status_desc.addr, &status, 1);
 }
 
@@ -372,6 +449,8 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
 bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
                               struct fabric_io *io, uint32_t queue) {
     bool used_any = false;
+    bool profile_enabled = blkd_profile_enabled();
+    struct blkd_profile_sample profile = {0};
 
     fprintf(stderr, "blkd: notify queue=%u\n", queue);
     if (queue != 0 || !dev->queue.ready) {
@@ -392,9 +471,20 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
         }
 
         fprintf(stderr, "blkd: process head=%u\n", head);
-        if (!process_chain(dev, io, head, &used_len) ||
-            !virtio_add_used(&dev->queue, io, fabric_dma_read_u16,
-                             fabric_dma_write, head, used_len)) {
+        if (!process_chain(dev, io, head, &used_len,
+                           profile_enabled ? &profile : NULL)) {
+            return false;
+        }
+        if (profile_enabled) {
+            uint64_t add_used_start_ns = monotonic_ns();
+
+            if (!virtio_add_used(&dev->queue, io, fabric_dma_read_u16,
+                                 fabric_dma_write, head, used_len)) {
+                return false;
+            }
+            profile_add(&profile.add_used_ns, add_used_start_ns);
+        } else if (!virtio_add_used(&dev->queue, io, fabric_dma_read_u16,
+                                    fabric_dma_write, head, used_len)) {
             return false;
         }
         dev->queue.last_avail_idx++;
@@ -402,10 +492,24 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
     }
 
     if (used_any) {
+        uint64_t irq_start_ns = profile_enabled ? monotonic_ns() : 0;
+
         dev->vdev.interrupt_status |= VIRTIO_INTERRUPT_VRING;
         if (!fabric_raise_irq(io)) {
             return false;
         }
+        if (profile_enabled) {
+            profile_add(&profile.irq_ns, irq_start_ns);
+        }
+    }
+
+    if (used_any && profile_enabled) {
+        fprintf(stderr,
+                "blkd: profile requests=%u chain_ns=%" PRIu64
+                " guest_dma_ns=%" PRIu64 " image_io_ns=%" PRIu64
+                " add_used_ns=%" PRIu64 " irq_ns=%" PRIu64 "\n",
+                profile.requests, profile.chain_ns, profile.guest_dma_ns,
+                profile.image_io_ns, profile.add_used_ns, profile.irq_ns);
     }
 
     return true;
