@@ -61,7 +61,7 @@ new file mode 100644
 index 0000000000..14521bdf7f
 --- /dev/null
 +++ b/hw/misc/axi.c
-@@ -0,0 +1,844 @@
+@@ -0,0 +1,932 @@
 +/*
 + * Emulated AXI fabric proxy device.
 + *
@@ -129,6 +129,7 @@ index 0000000000..14521bdf7f
 +    AXI_MSG_FRONTEND_NOTIFY = 100,
 +    AXI_MSG_FRONTEND_IRQ_ASSERT = 101,
 +    AXI_MSG_FRONTEND_IRQ_DEASSERT = 102,
++    AXI_MSG_FRONTEND_NOTIFY_ACK = 103,
 +    AXI_MSG_ERROR = 0xffff,
 +} AxiMsgKind;
 +
@@ -166,12 +167,81 @@ index 0000000000..14521bdf7f
 +    int sockfd;
 +    int listen_fd;
 +    int control_fd;
++    GMutex notify_lock;
++    GCond notify_cond;
++    uint32_t notify_seq;
++    uint32_t notify_ack_seq;
 +    bool socket_error_reported;
 +    bool virtio_node;
++    bool notify_ack;
 +    qemu_irq irq;
 +};
 +
 +static bool axi_control_send(AxiState *s, AxiMsgKind kind);
++static bool axi_io_all(int fd, void *buf, size_t len, bool is_write);
++static void axi_control_close(AxiState *s);
++static void axi_control_read(void *opaque);
++
++static void axi_wait_for_notify_ack(AxiState *s)
++{
++    gint64 deadline;
++    GPollFD pfd;
++
++    if (s->control_fd < 0) {
++        g_usleep(s->notify_delay_us);
++        return;
++    }
++
++    qemu_set_fd_handler(s->control_fd, NULL, NULL, NULL);
++    if (!axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY)) {
++        qemu_set_fd_handler(s->control_fd, axi_control_read, NULL, s);
++        g_usleep(s->notify_delay_us);
++        return;
++    }
++
++    deadline = g_get_monotonic_time() + s->notify_delay_us;
++    pfd.fd = s->control_fd;
++    pfd.events = G_IO_IN;
++    while (g_get_monotonic_time() < deadline) {
++        AxiMsgHeader hdr;
++        gint64 remaining = deadline - g_get_monotonic_time();
++        int ret;
++
++        pfd.revents = 0;
++        ret = g_poll(&pfd, 1, MAX(1, (int)((remaining + 999) / 1000)));
++        if (ret <= 0) {
++            break;
++        }
++        if (!(pfd.revents & G_IO_IN) ||
++            !axi_io_all(s->control_fd, &hdr, sizeof(hdr), false)) {
++            axi_control_close(s);
++            break;
++        }
++        if (hdr.kind == AXI_MSG_FRONTEND_NOTIFY_ACK) {
++            break;
++        }
++        switch (hdr.kind) {
++        case AXI_MSG_FRONTEND_IRQ_ASSERT:
++            if (s->irq) {
++                qemu_set_irq(s->irq, 1);
++            }
++            break;
++        case AXI_MSG_FRONTEND_IRQ_DEASSERT:
++            if (s->irq) {
++                qemu_set_irq(s->irq, 0);
++            }
++            break;
++        default:
++            qemu_log_mask(LOG_GUEST_ERROR,
++                          "%s: unsupported control message kind=%u\n", TYPE_AXI,
++                          hdr.kind);
++            break;
++        }
++    }
++    if (s->control_fd >= 0) {
++        qemu_set_fd_handler(s->control_fd, axi_control_read, NULL, s);
++    }
++}
 +
 +static bool axi_io_all(int fd, void *buf, size_t len, bool is_write)
 +{
@@ -248,6 +318,12 @@ index 0000000000..14521bdf7f
 +        if (s->irq) {
 +            qemu_set_irq(s->irq, 0);
 +        }
++        break;
++    case AXI_MSG_FRONTEND_NOTIFY_ACK:
++        g_mutex_lock(&s->notify_lock);
++        s->notify_ack_seq++;
++        g_cond_broadcast(&s->notify_cond);
++        g_mutex_unlock(&s->notify_lock);
 +        break;
 +    default:
 +        qemu_log_mask(LOG_GUEST_ERROR,
@@ -560,8 +636,12 @@ index 0000000000..14521bdf7f
 +        return 0;
 +    }
 +    if (s->role_value == AXI_ROLE_FRONTEND) {
-+        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
-+        g_usleep(s->notify_delay_us);
++        if (s->notify_ack) {
++            axi_wait_for_notify_ack(s);
++        } else {
++            axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
++            g_usleep(s->notify_delay_us);
++        }
 +    }
 +    memcpy(&value, s->shared_mmio + addr, size);
 +    return value;
@@ -595,12 +675,17 @@ index 0000000000..14521bdf7f
 +    }
 +
 +    if (s->role_value == AXI_ROLE_FRONTEND) {
-+        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
-+        g_usleep(s->notify_delay_us);
++        if (s->notify_ack) {
++            axi_wait_for_notify_ack(s);
++        } else {
++            axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
++            g_usleep(s->notify_delay_us);
++        }
 +    } else if (s->role_value == AXI_ROLE_BACKEND &&
 +               addr == AXI_CONTROL_IRQ_OFFSET) {
 +        axi_control_send(s, value ? AXI_MSG_FRONTEND_IRQ_ASSERT
 +                                  : AXI_MSG_FRONTEND_IRQ_DEASSERT);
++        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY_ACK);
 +    }
 +}
 +
@@ -771,6 +856,8 @@ index 0000000000..14521bdf7f
 +    s->sockfd = -1;
 +    s->listen_fd = -1;
 +    s->control_fd = -1;
++    g_mutex_init(&s->notify_lock);
++    g_cond_init(&s->notify_cond);
 +
 +    if (!s->base) {
 +        error_setg(errp, "base property is required");
@@ -881,6 +968,7 @@ index 0000000000..14521bdf7f
 +    DEFINE_PROP_LINK("dma-memdev", AxiState, dma_memdev, TYPE_MEMORY_BACKEND,
 +                     HostMemoryBackend *),
 +    DEFINE_PROP_BOOL("virtio-node", AxiState, virtio_node, true),
++    DEFINE_PROP_BOOL("notify-ack", AxiState, notify_ack, true),
 +};
 +
 +static void axi_class_init(ObjectClass *klass, const void *data)

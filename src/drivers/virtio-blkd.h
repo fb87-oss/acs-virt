@@ -10,6 +10,8 @@
 
 #define BLKD_SECTOR_SIZE 512u
 #define BLKD_QUEUE_SIZE 256u
+#define BLKD_MAX_SEG_SIZE (64u * 1024u)
+#define BLKD_MAX_SEGMENTS 128u
 
 /** @brief Parsed runtime configuration for the virtio-blk daemon. */
 struct blkd_config {
@@ -33,6 +35,8 @@ struct blkd_virtio_device {
     uint64_t capacity_sectors; ///< Exposed device capacity in 512-byte sectors.
     struct virtio_device vdev; ///< Transport-independent virtio state.
     struct virtio_queue queue; ///< Single virtio-blk request queue.
+    uint8_t *io_buf;           ///< Reusable data buffer for request payloads.
+    uint32_t io_buf_size;      ///< Allocated size of io_buf in bytes.
 };
 
 #define blkd_load_le16 virtio_load_le16

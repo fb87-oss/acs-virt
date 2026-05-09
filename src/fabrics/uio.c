@@ -525,21 +525,43 @@ bool fabric_run(struct fabric *fabric) {
  */
 bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
                      uint8_t **data) {
+    *data = NULL;
+    if (!len) {
+        return true;
+    }
+    *data = malloc(len);
+    if (!*data) {
+        return false;
+    }
+    if (!fabric_dma_read_into(io, gpa, len, *data)) {
+        free(*data);
+        *data = NULL;
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief Reads bytes from the frontend RAM DMA resource into an existing buffer.
+ *
+ * @param io Active fabric I/O context.
+ * @param gpa Frontend guest physical address.
+ * @param len Number of bytes to read.
+ * @param data Destination buffer.
+ * @return bool True on success, false when the read is out of bounds.
+ */
+bool fabric_dma_read_into(struct fabric_io *io, uint64_t gpa, uint32_t len,
+                          void *data) {
     uint64_t offset;
 
     (void)io;
-    *data = NULL;
     if (!len) {
         return true;
     }
     if (!dma_offset(gpa, len, &offset)) {
         return false;
     }
-    *data = malloc(len);
-    if (!*data) {
-        return false;
-    }
-    memcpy(*data, g_uio.dma.addr + offset, len);
+    memcpy(data, g_uio.dma.addr + offset, len);
     return true;
 }
 
@@ -552,13 +574,12 @@ bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
  * @return bool True on success, false on DMA read failure.
  */
 bool fabric_dma_read_u16(struct fabric_io *io, uint64_t gpa, uint16_t *value) {
-    uint8_t *data = NULL;
+    uint8_t data[2];
 
-    if (!fabric_dma_read(io, gpa, 2, &data)) {
+    if (!fabric_dma_read_into(io, gpa, sizeof(data), data)) {
         return false;
     }
     *value = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
-    free(data);
     return true;
 }
 

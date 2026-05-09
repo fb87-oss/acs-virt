@@ -180,7 +180,8 @@ bool blkd_block_flush(struct blkd_block_backend *backend) {
 static uint64_t get_features(void *opaque) {
     (void)opaque;
 
-    return (1ull << VIRTIO_BLK_F_BLK_SIZE) | (1ull << VIRTIO_BLK_F_FLUSH) |
+    return (1ull << VIRTIO_BLK_F_SIZE_MAX) | (1ull << VIRTIO_BLK_F_SEG_MAX) |
+           (1ull << VIRTIO_BLK_F_BLK_SIZE) | (1ull << VIRTIO_BLK_F_FLUSH) |
            (1ull << VIRTIO_F_VERSION_1);
 }
 
@@ -201,6 +202,10 @@ static uint64_t get_config(void *opaque, uint64_t offset, uint32_t len) {
         return (uint32_t)dev->capacity_sectors;
     case offsetof(struct virtio_blk_config, capacity) + 4:
         return (uint32_t)(dev->capacity_sectors >> 32);
+    case offsetof(struct virtio_blk_config, size_max):
+        return BLKD_MAX_SEG_SIZE;
+    case offsetof(struct virtio_blk_config, seg_max):
+        return BLKD_MAX_SEGMENTS;
     case offsetof(struct virtio_blk_config, blk_size):
         return BLKD_SECTOR_SIZE;
     default:
@@ -222,11 +227,32 @@ static const struct virtio_device_ops virtio_ops = {
  */
 void blkd_virtio_init(struct blkd_virtio_device *dev,
                       struct blkd_block_backend *backend) {
+    uint8_t *io_buf = dev->io_buf;
+    uint32_t io_buf_size = dev->io_buf_size;
+
     memset(dev, 0, sizeof(*dev));
     dev->backend = backend;
+    dev->io_buf = io_buf;
+    dev->io_buf_size = io_buf_size;
     dev->capacity_sectors = backend->image_len / BLKD_SECTOR_SIZE;
     virtio_device_init(&dev->vdev, VIRTIO_ID_BLOCK, VIRTIO_VENDOR_ID_LOCAL, 1,
                        BLKD_QUEUE_SIZE, &dev->queue, dev, &virtio_ops);
+}
+
+/** @brief Ensures the reusable request payload buffer is large enough. */
+static bool ensure_io_buf(struct blkd_virtio_device *dev, uint32_t len) {
+    uint8_t *buf;
+
+    if (len <= dev->io_buf_size) {
+        return true;
+    }
+    buf = realloc(dev->io_buf, len);
+    if (!buf) {
+        return false;
+    }
+    dev->io_buf = buf;
+    dev->io_buf_size = len;
+    return true;
 }
 
 /**
@@ -242,7 +268,7 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
                           uint16_t head, uint32_t *used_len) {
     struct virtio_desc header_desc;
     struct virtio_desc status_desc;
-    uint8_t *header = NULL;
+    uint8_t header[16];
     uint8_t status = VIRTIO_BLK_S_OK;
     uint32_t request_type;
     uint64_t sector;
@@ -256,13 +282,12 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
     if (!virtio_read_desc(&dev->queue, io, fabric_dma_read, head,
                           &header_desc) ||
         !(header_desc.flags & VRING_DESC_F_NEXT) ||
-        !fabric_dma_read(io, header_desc.addr, 16, &header)) {
+        !fabric_dma_read_into(io, header_desc.addr, sizeof(header), header)) {
         return false;
     }
 
     request_type = blkd_load_le32(header);
     sector = blkd_load_le64(header + 8);
-    free(header);
 
     if (sector > UINT64_MAX / BLKD_SECTOR_SIZE) {
         status = VIRTIO_BLK_S_IOERR;
@@ -279,7 +304,6 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
     index = header_desc.next;
     for (;;) {
         struct virtio_desc desc;
-        uint8_t *data = NULL;
         bool last;
 
         if (++chain_seen > dev->queue.num ||
@@ -297,28 +321,27 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
             if (!(desc.flags & VRING_DESC_F_WRITE)) {
                 status = VIRTIO_BLK_S_IOERR;
             } else if (status == VIRTIO_BLK_S_OK) {
-                data = calloc(1, desc.len);
-                if (!data ||
-                    !blkd_block_read(dev->backend, offset + data_len, data,
-                                     desc.len) ||
-                    !fabric_dma_write(io, desc.addr, data, desc.len)) {
+                if (!ensure_io_buf(dev, desc.len) ||
+                    !blkd_block_read(dev->backend, offset + data_len,
+                                     dev->io_buf, desc.len) ||
+                    !fabric_dma_write(io, desc.addr, dev->io_buf, desc.len)) {
                     status = VIRTIO_BLK_S_IOERR;
                 }
-                free(data);
             }
             data_len += desc.len;
         } else if (request_type == VIRTIO_BLK_T_OUT) {
             if (desc.flags & VRING_DESC_F_WRITE) {
                 status = VIRTIO_BLK_S_IOERR;
             } else if (status == VIRTIO_BLK_S_OK) {
-                if (!fabric_dma_read(io, desc.addr, desc.len, &data)) {
+                if (!ensure_io_buf(dev, desc.len) ||
+                    !fabric_dma_read_into(io, desc.addr, desc.len,
+                                          dev->io_buf)) {
                     return false;
                 }
-                if (!blkd_block_write(dev->backend, offset + data_len, data,
-                                      desc.len)) {
+                if (!blkd_block_write(dev->backend, offset + data_len,
+                                      dev->io_buf, desc.len)) {
                     status = VIRTIO_BLK_S_IOERR;
                 }
-                free(data);
             }
             data_len += desc.len;
         }

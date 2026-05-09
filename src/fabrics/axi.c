@@ -468,6 +468,34 @@ bool fabric_run(struct fabric *bus) {
  */
 bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
                      uint8_t **data) {
+    uint8_t *buf = NULL;
+
+    if (len) {
+        buf = malloc(len);
+        if (!buf) {
+            return false;
+        }
+    }
+    if (!fabric_dma_read_into(io, gpa, len, buf)) {
+        free(buf);
+        return false;
+    }
+
+    *data = buf;
+    return true;
+}
+
+/**
+ * @brief Requests a guest memory read from QEMU into an existing buffer.
+ *
+ * @param io Active fabric I/O context.
+ * @param gpa Guest physical address to read from.
+ * @param len Number of bytes to read.
+ * @param data Destination buffer.
+ * @return bool True on success, false on socket or protocol failure.
+ */
+bool fabric_dma_read_into(struct fabric_io *io, uint64_t gpa, uint32_t len,
+                          void *data) {
     struct axi_header request = {
         .kind = AXI_MSG_DMA_READ,
         .flags = 0,
@@ -476,7 +504,6 @@ bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
         .length = len,
     };
     struct axi_header reply;
-    uint8_t *buf = NULL;
 
     if (!write_header(io->fd, &request) || !read_header(io->fd, &reply)) {
         return false;
@@ -485,18 +512,9 @@ bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
         return false;
     }
 
-    if (len) {
-        buf = malloc(len);
-        if (!buf) {
-            return false;
-        }
-        if (!io_all(io->fd, buf, len, false)) {
-            free(buf);
-            return false;
-        }
+    if (len && !io_all(io->fd, data, len, false)) {
+        return false;
     }
-
-    *data = buf;
     return true;
 }
 
@@ -509,12 +527,12 @@ bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
  * @return bool True on success, false on socket or protocol failure.
  */
 bool fabric_dma_read_u16(struct fabric_io *io, uint64_t gpa, uint16_t *value) {
-    uint8_t *data = NULL;
-    if (!fabric_dma_read(io, gpa, 2, &data)) {
+    uint8_t data[2];
+
+    if (!fabric_dma_read_into(io, gpa, sizeof(data), data)) {
         return false;
     }
     *value = load_le16(data);
-    free(data);
     return true;
 }
 

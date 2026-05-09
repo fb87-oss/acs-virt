@@ -1,5 +1,7 @@
 #include "virtio.h"
 
+#include "fabrics/fabric.h"
+
 #include <stdlib.h>
 
 /**
@@ -64,9 +66,11 @@ void virtio_device_init(struct virtio_device *dev, uint32_t device_id,
 bool virtio_read_desc(const struct virtio_queue *queue, struct fabric_io *io,
                       virtio_dma_read_fn dma_read, uint16_t index,
                       struct virtio_desc *desc) {
-    uint8_t *data = NULL;
+    uint8_t data[16];
 
-    if (!dma_read(io, queue->desc + ((uint64_t)index * 16), 16, &data)) {
+    (void)dma_read;
+    if (!fabric_dma_read_into(io, queue->desc + ((uint64_t)index * 16),
+                              sizeof(data), data)) {
         return false;
     }
 
@@ -74,7 +78,6 @@ bool virtio_read_desc(const struct virtio_queue *queue, struct fabric_io *io,
     desc->len = virtio_load_le32(data + 8);
     desc->flags = virtio_load_le16(data + 12);
     desc->next = virtio_load_le16(data + 14);
-    free(data);
     return true;
 }
 

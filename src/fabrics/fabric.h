@@ -74,7 +74,19 @@ bool fabric_run(struct fabric *fabric);
  * @return bool True on success, false on fabric or protocol failure.
  */
 bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
-                     uint8_t **data);
+                      uint8_t **data);
+
+/**
+ * @brief Reads guest physical memory into a caller-provided buffer.
+ *
+ * @param io Active fabric I/O context.
+ * @param gpa Guest physical address to read from.
+ * @param len Number of bytes to read.
+ * @param data Destination buffer.
+ * @return bool True on success, false on fabric or protocol failure.
+ */
+bool fabric_dma_read_into(struct fabric_io *io, uint64_t gpa, uint32_t len,
+                          void *data);
 
 /**
  * @brief Requests a 16-bit little-endian guest physical memory read.

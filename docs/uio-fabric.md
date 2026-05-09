@@ -169,3 +169,27 @@ tests/run-benchmark-a64.sh
 
 The benchmark defaults to a small `1MiB` transfer because the current UIO path is
 functional but slow; larger transfers can be requested with `BENCH_SIZE_MB`.
+
+## Benchmark Records
+
+The `perf/uio-throughput` branch improved block request coalescing by advertising
+`VIRTIO_BLK_F_SIZE_MAX` and `VIRTIO_BLK_F_SEG_MAX`, with `size_max=64K` and
+`seg_max=128`. It also adds direct DMA reads into caller-provided buffers and a
+QEMU notify-ack path for topologies where that handshake is stable.
+
+Recorded on 2026-05-09 with `BENCH_SIZE_MB=64 BENCH_BS=64K`:
+
+```text
+x64 UIO benchmark:
+  write: 67108864 bytes (64.0MB) copied, 4.518090 seconds, 14.2MB/s
+  read:  67108864 bytes (64.0MB) copied, 1.922790 seconds, 33.3MB/s
+  backend requests: read=20 write=140 flush=0
+
+ARM64 UIO benchmark:
+  write: 67108864 bytes (64.0MB) copied, 3.511523 seconds, 18.2MB/s
+  read:  67108864 bytes (64.0MB) copied, 2.850338 seconds, 22.5MB/s
+  backend requests: read=20 write=139 flush=0
+```
+
+Before advertising the segment limits, the same 64MiB write path issued `16384`
+backend write requests, effectively one 4KiB request at a time.

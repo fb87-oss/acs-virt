@@ -462,11 +462,6 @@ bool fabric_run(struct fabric *fabric) {
  */
 bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
                      uint8_t **data) {
-    size_t map_len;
-    size_t page_delta;
-    uint8_t *map;
-
-    (void)io;
     *data = NULL;
     if (!len) {
         return true;
@@ -475,13 +470,38 @@ bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
     if (!*data) {
         return false;
     }
-    map = map_phys(gpa, len, &map_len, &page_delta);
-    if (map == MAP_FAILED) {
+    if (!fabric_dma_read_into(io, gpa, len, *data)) {
         free(*data);
         *data = NULL;
         return false;
     }
-    memcpy(*data, map + page_delta, len);
+    return true;
+}
+
+/**
+ * @brief Reads guest physical memory through devmem into an existing buffer.
+ *
+ * @param io Active fabric I/O context.
+ * @param gpa Guest physical address to read from.
+ * @param len Number of bytes to read.
+ * @param data Destination buffer.
+ * @return bool True on success, false on mmap failure.
+ */
+bool fabric_dma_read_into(struct fabric_io *io, uint64_t gpa, uint32_t len,
+                          void *data) {
+    size_t map_len;
+    size_t page_delta;
+    uint8_t *map;
+
+    (void)io;
+    if (!len) {
+        return true;
+    }
+    map = map_phys(gpa, len, &map_len, &page_delta);
+    if (map == MAP_FAILED) {
+        return false;
+    }
+    memcpy(data, map + page_delta, len);
     munmap(map, map_len);
     return true;
 }
@@ -496,13 +516,12 @@ bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
  * @return bool True on success, false on mmap or allocation failure.
  */
 bool fabric_dma_read_u16(struct fabric_io *io, uint64_t gpa, uint16_t *value) {
-    uint8_t *data = NULL;
+    uint8_t data[2];
 
-    if (!fabric_dma_read(io, gpa, 2, &data)) {
+    if (!fabric_dma_read_into(io, gpa, sizeof(data), data)) {
         return false;
     }
     *value = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
-    free(data);
     return true;
 }
 

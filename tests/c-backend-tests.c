@@ -193,7 +193,10 @@ CTEST(blkd_virtio, exposes_linux_virtio_mmio_probe_registers)
     ASSERT_EQUAL_U(VIRTIO_VENDOR_ID_LOCAL, virtio_mmio_read(&mmio, VIRTIO_MMIO_VENDOR_ID, 4));
 
     virtio_mmio_write(&mmio, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 0);
-    ASSERT_EQUAL_U((1u << VIRTIO_BLK_F_BLK_SIZE) | (1u << VIRTIO_BLK_F_FLUSH),
+    ASSERT_EQUAL_U((1u << VIRTIO_BLK_F_SIZE_MAX) |
+                       (1u << VIRTIO_BLK_F_SEG_MAX) |
+                       (1u << VIRTIO_BLK_F_BLK_SIZE) |
+                       (1u << VIRTIO_BLK_F_FLUSH),
                    virtio_mmio_read(&mmio, VIRTIO_MMIO_DEVICE_FEATURES, 4));
     virtio_mmio_write(&mmio, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 1);
     ASSERT_EQUAL_U(1u << (VIRTIO_F_VERSION_1 - 32),
@@ -201,6 +204,10 @@ CTEST(blkd_virtio, exposes_linux_virtio_mmio_probe_registers)
 
     ASSERT_EQUAL_U((uint32_t)(backend.image_len / BLKD_SECTOR_SIZE),
                    virtio_mmio_read(&mmio, VIRTIO_MMIO_CONFIG + offsetof(struct virtio_blk_config, capacity), 4));
+    ASSERT_EQUAL_U(BLKD_MAX_SEG_SIZE,
+                   virtio_mmio_read(&mmio, VIRTIO_MMIO_CONFIG + offsetof(struct virtio_blk_config, size_max), 4));
+    ASSERT_EQUAL_U(BLKD_MAX_SEGMENTS,
+                   virtio_mmio_read(&mmio, VIRTIO_MMIO_CONFIG + offsetof(struct virtio_blk_config, seg_max), 4));
     ASSERT_EQUAL_U(BLKD_SECTOR_SIZE,
                    virtio_mmio_read(&mmio, VIRTIO_MMIO_CONFIG + offsetof(struct virtio_blk_config, blk_size), 4));
 }
