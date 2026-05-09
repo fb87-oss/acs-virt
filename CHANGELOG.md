@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-05-09
+
+- Added a configurable QEMU `axi.notify-delay-us` property for UIO frontend notifications.
+- Tuned UIO orchestration to use a shorter notify delay for AArch64 frontends while preserving the stable x86_64 frontend delay.
+
 ## 2026-05-08
 
 - Added target-aware QEMU build support for x86_64 microvm and AArch64 virt, including a shared `scripts/build-qemu.sh` helper and architecture-specific wrappers.

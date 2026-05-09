@@ -61,7 +61,7 @@ new file mode 100644
 index 0000000000..14521bdf7f
 --- /dev/null
 +++ b/hw/misc/axi.c
-@@ -0,0 +1,841 @@
+@@ -0,0 +1,844 @@
 +/*
 + * Emulated AXI fabric proxy device.
 + *
@@ -153,6 +153,7 @@ index 0000000000..14521bdf7f
 +    uint64_t dma_base;
 +    uint64_t dma_size;
 +    uint32_t irq_num;
++    uint32_t notify_delay_us;
 +    char *socket_path;
 +    char *mode;
 +    char *role;
@@ -560,7 +561,7 @@ index 0000000000..14521bdf7f
 +    }
 +    if (s->role_value == AXI_ROLE_FRONTEND) {
 +        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
-+        g_usleep(AXI_UIO_NOTIFY_DELAY_US);
++        g_usleep(s->notify_delay_us);
 +    }
 +    memcpy(&value, s->shared_mmio + addr, size);
 +    return value;
@@ -595,7 +596,7 @@ index 0000000000..14521bdf7f
 +
 +    if (s->role_value == AXI_ROLE_FRONTEND) {
 +        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
-+        g_usleep(AXI_UIO_NOTIFY_DELAY_US);
++        g_usleep(s->notify_delay_us);
 +    } else if (s->role_value == AXI_ROLE_BACKEND &&
 +               addr == AXI_CONTROL_IRQ_OFFSET) {
 +        axi_control_send(s, value ? AXI_MSG_FRONTEND_IRQ_ASSERT
@@ -867,6 +868,8 @@ index 0000000000..14521bdf7f
 +    DEFINE_PROP_UINT64("dma-base", AxiState, dma_base, 0),
 +    DEFINE_PROP_UINT64("dma-size", AxiState, dma_size, 0),
 +    DEFINE_PROP_UINT32("irq", AxiState, irq_num, 0),
++    DEFINE_PROP_UINT32("notify-delay-us", AxiState, notify_delay_us,
++                       AXI_UIO_NOTIFY_DELAY_US),
 +    DEFINE_PROP_STRING("socket", AxiState, socket_path),
 +    DEFINE_PROP_STRING("mode", AxiState, mode),
 +    DEFINE_PROP_STRING("role", AxiState, role),

@@ -136,6 +136,7 @@ def memory_object_args(name: str, path: Path, size: int) -> list[str]:
 
 def axi_device_arg(name: str, base: int, irq: int, memdev: str, control: Path,
                    role: str, virtio_node: bool, dma_base: int,
+                   notify_delay_us: int | None = None,
                    dma_memdev: str | None = None) -> str:
     parts = [
         "axi",
@@ -149,6 +150,8 @@ def axi_device_arg(name: str, base: int, irq: int, memdev: str, control: Path,
         f"control-socket={control}",
         f"virtio-node={'on' if virtio_node else 'off'}",
     ]
+    if notify_delay_us is not None:
+        parts.append(f"notify-delay-us={notify_delay_us}")
     if dma_memdev:
         parts.extend([
             f"dma-memdev={dma_memdev}",
@@ -255,6 +258,7 @@ def main() -> int:
     run_dir = Path(args.run_dir) if args.run_dir else Path(tempfile.mkdtemp(prefix=prefix, dir=os.environ.get("TMPDIR", "/tmp")))
     run_dir.mkdir(parents=True, exist_ok=True)
     include_console = frontend_arch != "a64" or args.mode != "benchmark"
+    notify_delay_us = 25000 if frontend_arch == "a64" else 50000
 
     frontend_ram = run_dir / "frontend.ram"
     backend_ram = run_dir / "backend.ram"
@@ -290,7 +294,8 @@ def main() -> int:
         axi_device_arg("blk0", int(frontend_config["frontend_blk_base"]),
                        int(frontend_config["blk_irq"]),
                        "blkmmio", blk_control, "frontend", True,
-                       int(backend_config["backend_dma_base"])),
+                       int(backend_config["backend_dma_base"]),
+                       notify_delay_us),
     ])
     if include_console:
         frontend_args.extend([
@@ -298,7 +303,8 @@ def main() -> int:
             axi_device_arg("con0", int(frontend_config["frontend_con_base"]),
                            int(frontend_config["con_irq"]),
                            "conmmio", con_control, "frontend", True,
-                           int(backend_config["backend_dma_base"])),
+                           int(backend_config["backend_dma_base"]),
+                           notify_delay_us),
         ])
 
     backend_args = common_qemu_args(
@@ -317,7 +323,8 @@ def main() -> int:
         axi_device_arg("blk0", int(backend_config["backend_blk_base"]),
                        int(backend_config["blk_irq"]),
                        "blkmmio", blk_control, "backend", False,
-                       int(backend_config["backend_dma_base"]), "frontendram"),
+                       int(backend_config["backend_dma_base"]), None,
+                       "frontendram"),
     ])
     if include_console:
         backend_args.extend([
@@ -325,7 +332,8 @@ def main() -> int:
             axi_device_arg("con0", int(backend_config["backend_con_base"]),
                            int(backend_config["con_irq"]),
                            "conmmio", con_control, "backend", False,
-                           int(backend_config["backend_dma_base"]), "frontendram"),
+                           int(backend_config["backend_dma_base"]), None,
+                           "frontendram"),
         ])
 
     processes: list[subprocess.Popen] = []
