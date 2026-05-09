@@ -67,6 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("smoke", "benchmark"), default="smoke")
     parser.add_argument("--bench-size-mb", type=int, default=16)
     parser.add_argument("--bench-bs", default="64K")
+    parser.add_argument("--bench-repeat", type=int, default=1)
     return parser.parse_args()
 
 
@@ -78,19 +79,34 @@ def parse_block_size(value: str) -> int:
     return int(value)
 
 
-def extract_dd_result(log_text: str, start: str, end: str) -> str:
+def extract_dd_results(log_text: str, start_prefix: str, end_prefix: str) -> list[str]:
     in_section = False
-    result = ""
+    results = []
 
     for line in log_text.splitlines():
-        if start in line:
+        stripped = line.strip()
+        if stripped.startswith(start_prefix):
             in_section = True
             continue
-        if end in line:
+        if stripped.startswith(end_prefix):
             in_section = False
         if in_section and "copied" in line:
-            result = line
-    return result
+            results.append(line)
+    return results
+
+
+def parse_dd_seconds(result: str) -> float:
+    match = re.search(r"copied,\s+([0-9.]+)\s+seconds", result)
+    if not match:
+        raise RuntimeError(f"failed to parse dd seconds from: {result}")
+    return float(match.group(1))
+
+
+def throughput_summary(results: list[str], bytes_copied: int) -> str:
+    rates = [(bytes_copied / parse_dd_seconds(result)) / (1024 * 1024)
+             for result in results]
+
+    return f"min={min(rates):.1f}MiB/s avg={sum(rates) / len(rates):.1f}MiB/s max={max(rates):.1f}MiB/s"
 
 
 def extract_backend_profile(log_text: str) -> str:
@@ -285,6 +301,8 @@ def main() -> int:
     backend_qemu_bin = workspace / str(backend_config["qemu"])
     if args.bench_size_mb <= 0:
         raise ValueError("--bench-size-mb must be greater than zero")
+    if args.bench_repeat <= 0:
+        raise ValueError("--bench-repeat must be greater than zero")
     bench_bs_bytes = parse_block_size(args.bench_bs)
     if bench_bs_bytes <= 0:
         raise ValueError("--bench-bs must be greater than zero")
@@ -431,14 +449,16 @@ wait
         if args.mode == "benchmark":
             frontend_script = f"""
 while [ ! -b /dev/vda ]; do sleep 1; done
-echo BENCH_CONFIG size_mb={args.bench_size_mb} bs={args.bench_bs} count={bench_count}
-echo WRITE_BENCH_START
-dd if=/dev/zero of=/dev/vda bs={args.bench_bs} count={bench_count} 2>&1
-sync
-echo WRITE_BENCH_END
-echo READ_BENCH_START
-dd if=/dev/vda of=/dev/null bs={args.bench_bs} count={bench_count} 2>&1
-echo READ_BENCH_END
+echo BENCH_CONFIG size_mb={args.bench_size_mb} bs={args.bench_bs} count={bench_count} repeat={args.bench_repeat}
+for run in $(seq 1 {args.bench_repeat}); do
+  echo WRITE_BENCH_START run=$run
+  dd if=/dev/zero of=/dev/vda bs={args.bench_bs} count={bench_count} 2>&1
+  sync
+  echo WRITE_BENCH_END run=$run
+  echo READ_BENCH_START run=$run
+  dd if=/dev/vda of=/dev/null bs={args.bench_bs} count={bench_count} 2>&1
+  echo READ_BENCH_END run=$run
+done
 echo UIO_BENCH_DONE
 """
             done_marker = "UIO_BENCH_DONE"
@@ -477,16 +497,21 @@ echo UIO_SMOKE_TEST_DONE
         if args.mode == "benchmark":
             frontend_text = frontend_log.read_text(errors="replace")
             backend_text = backend_log.read_text(errors="replace")
-            write_result = extract_dd_result(frontend_text, "WRITE_BENCH_START", "WRITE_BENCH_END")
-            read_result = extract_dd_result(frontend_text, "READ_BENCH_START", "READ_BENCH_END")
-            if not write_result or not read_result:
+            write_results = extract_dd_results(frontend_text, "WRITE_BENCH_START", "WRITE_BENCH_END")
+            read_results = extract_dd_results(frontend_text, "READ_BENCH_START", "READ_BENCH_END")
+            if len(write_results) != args.bench_repeat or len(read_results) != args.bench_repeat:
                 raise RuntimeError("failed to parse dd throughput from frontend log")
             print("uio dd benchmark complete")
             print()
             print("benchmark summary")
-            print(f"  config: size={args.bench_size_mb}MiB bs={args.bench_bs} count={bench_count}")
-            print(f"  write:  {write_result}")
-            print(f"  read:   {read_result}")
+            print(f"  config: size={args.bench_size_mb}MiB bs={args.bench_bs} count={bench_count} repeat={args.bench_repeat}")
+            for index, result in enumerate(write_results, 1):
+                print(f"  write[{index}]: {result}")
+            for index, result in enumerate(read_results, 1):
+                print(f"  read[{index}]:  {result}")
+            if args.bench_repeat > 1:
+                print(f"  write summary: {throughput_summary(write_results, bench_bytes)}")
+                print(f"  read summary:  {throughput_summary(read_results, bench_bytes)}")
             print("  backend requests: "
                   f"read={backend_text.count('request type=0')} "
                   f"write={backend_text.count('request type=1')} "

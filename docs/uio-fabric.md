@@ -169,6 +169,12 @@ tests/run-benchmark-a64.sh
 
 The benchmark defaults to a small `1MiB` transfer because the current UIO path is
 functional but slow; larger transfers can be requested with `BENCH_SIZE_MB`.
+Set `BENCH_REPEAT` to run the write/read benchmark multiple times within the
+same VM pair and print min/average/max throughput summaries:
+
+```sh
+BENCH_REPEAT=3 BENCH_SIZE_MB=64 tests/run-benchmark.sh
+```
 
 Backend request timing can be enabled for benchmark runs with
 `CHIPLETS_PROFILE_BACKEND=1`. The orchestrator passes
