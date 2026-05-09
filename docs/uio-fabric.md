@@ -7,7 +7,8 @@ while keeping the backend event loop interrupt-driven.
 
 ## Topology
 
-`nix run .#runuio-x64` starts two x86_64 microVMs:
+`nix run .#runuio-x64` starts two x86_64 microVMs. `nix run .#runuio-a64`
+starts the same two-VM topology with ARM64 `virt` machines under TCG:
 
 - The frontend VM boots the normal virtio-mmio drivers and sees the block and
   console devices through ACPI `virtio-mmio` nodes.
@@ -28,10 +29,16 @@ The current x64 smoke topology is:
 - Device windows: `0x1000` bytes
 - IRQs: block `16`, console `17`
 
+The current ARM64 smoke topology uses the same MMIO and DMA layout with GIC SPI
+IRQs block `48` and console `49`. QEMU exports frontend `virtio,mmio` FDT nodes
+and backend `chiplets,uio` FDT nodes.
+
 ## Backend Devices
 
-The backend guest loads `chiplets_uio.ko`, a small platform UIO driver used by
-the smoke/benchmark topology. It registers two UIO devices:
+The x64 backend guest loads `chiplets_uio.ko`, a small platform UIO driver used
+by the smoke/benchmark topology. ARM64 uses the kernel `uio_pdrv_genirq` module
+against QEMU-provided `chiplets,uio` device-tree nodes. Both paths register two
+UIO devices:
 
 - `map0`: the shared virtio-mmio/control window.
 - `map1`: the frontend RAM DMA aperture.
@@ -39,11 +46,14 @@ the smoke/benchmark topology. It registers two UIO devices:
 The backend daemon endpoint syntax is:
 
 ```text
-uio:/dev/uioX[:irq-control-offset]
+uio:/dev/uioX[:irq-control-offset[:dma-base]]
 ```
 
 If the IRQ control offset is omitted, the backend uses `0x200`. Writing `1` to
 that offset requests a frontend IRQ assertion; writing `0` requests deassertion.
+`dma-base` is the frontend guest physical address corresponding to the first byte
+of UIO `map1`; it is `0` for x64 microvm frontends and `0x40000000` for ARM64
+`virt` frontends.
 
 ## Notification Flow
 
@@ -75,14 +85,56 @@ new selected queue.
 
 ## DMA Flow
 
-The backend daemon maps UIO `map1` and treats guest physical addresses from the
-frontend virtqueues as offsets into that mapping. Descriptor reads, block data
+The backend daemon maps UIO `map1` and translates frontend guest physical
+addresses by subtracting the configured `dma-base`. Descriptor reads, block data
 copies, and console payload reads are therefore direct memory copies inside the
 backend guest process. No host socket DMA messages are used in UIO mode.
 
+## How It Works
+
+The UIO topology is a two-VM virtio split. The frontend VM is the normal Linux
+driver side, so it only needs regular `virtio-mmio` device nodes. The backend VM
+is the device-emulation side, so it receives UIO devices whose resources expose
+the same transport register files plus a DMA window onto the frontend RAM file.
+
+Each virtual device has two host-backed shared files. One file is a `0x1000`
+virtio-mmio register window mapped by both QEMU processes. The second shared
+object is the frontend RAM backing file, additionally mapped into the backend VM
+at the backend DMA aperture. Frontend register accesses therefore become shared
+memory updates, and backend descriptor/data accesses become ordinary loads and
+stores through UIO `map1`.
+
+Interrupts are bridged by a small QEMU control protocol rather than by polling.
+When the frontend driver reads or writes a transport register, the frontend QEMU
+sends a notify message to the backend QEMU over the per-device Unix control
+socket. The backend QEMU pulses the backend VM's UIO interrupt line. Linux wakes
+the backend daemon from `read(/dev/uioX)`, the daemon re-enables the UIO IRQ, then
+scans the writable virtio-mmio registers and runs the block or console device
+model callbacks.
+
+The reverse interrupt direction uses a reserved control word inside the backend
+UIO MMIO window. When the backend has consumed a virtqueue descriptor or has data
+available, it writes `1` or `0` at offset `0x200`. Backend QEMU interprets that as
+frontend IRQ assert or deassert and forwards it over the control socket to the
+frontend QEMU, which drives the frontend guest IRQ line.
+
+The orchestrator starts the frontend QEMU paused, starts the backend QEMU, boots
+the backend guest, launches the backend daemons, waits until the daemons report
+that their UIO mappings are active, and only then resumes the frontend VM through
+QMP. This avoids the frontend Linux virtio drivers probing before the backend has
+published valid feature registers.
+
+Architecture-specific pieces are deliberately small. x86_64 uses the custom
+`chiplets_uio.ko` driver to provide stable platform UIO resources for the
+microVM topology. ARM64 uses `uio_pdrv_genirq` with QEMU-generated
+`chiplets,uio` FDT nodes. The backend endpoint's `dma-base` tells the daemon how
+to translate frontend guest physical addresses into offsets inside the DMA UIO
+mapping: `0` for x86_64 microVM frontends and `0x40000000` for ARM64 `virt`
+frontends.
+
 ## Test And Benchmark Entry Points
 
-The x64 test and benchmark scripts now exercise the UIO fabric:
+The x64 test and benchmark scripts exercise the UIO fabric:
 
 ```sh
 tests/run-tests.sh
@@ -93,6 +145,27 @@ Both scripts call `nix run .#runuio-x64`, which builds backend daemons with
 `CHIPLETS_BACKEND_FABRIC=uio`, packages them into a temporary initrd with
 `chiplets_uio.ko`, and launches the two-VM orchestrator in
 `scripts/chiplets-uio-x64.py`.
+
+`tests/run-tests-a64.sh` calls `nix run .#runuio-a64`, cross-builds ARM64 backend
+daemons, packages them with the ARM64 kernel modules, and launches the same
+orchestrator with `--arch a64`.
+
+Mixed-architecture smoke wrappers exercise both cross directions:
+
+```sh
+tests/run-tests-a64-backend-x64-frontend.sh
+tests/run-tests-x64-backend-a64-frontend.sh
+```
+
+They call `runuio-a64-backend-x64-frontend` and
+`runuio-x64-backend-a64-frontend`, respectively, which pass separate frontend
+and backend kernels/initrds into the two-VM orchestrator.
+
+The ARM64 benchmark wrapper is:
+
+```sh
+tests/run-benchmark-a64.sh
+```
 
 The benchmark defaults to a small `1MiB` transfer because the current UIO path is
 functional but slow; larger transfers can be requested with `BENCH_SIZE_MB`.

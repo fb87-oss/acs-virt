@@ -1,6 +1,7 @@
 #include <linux/acpi.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/uio_driver.h>
@@ -51,7 +52,12 @@ static int chiplets_uio_irqcontrol(struct uio_info *info, s32 irq_on)
 
 static unsigned chiplets_uio_index(struct platform_device *pdev)
 {
+    struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
     const char *name = dev_name(&pdev->dev);
+
+    if (res && resource_size(res) > 0) {
+        return (res->start - CHIPLET_UIO_MMIO_BASE) / CHIPLET_UIO_MMIO_SIZE;
+    }
 
     if (strstr(name, ":01")) {
         return 1;
@@ -62,6 +68,8 @@ static unsigned chiplets_uio_index(struct platform_device *pdev)
 static int chiplets_uio_probe(struct platform_device *pdev)
 {
     struct chiplets_uio_dev *dev;
+    struct resource *dma_res;
+    struct resource *mmio_res;
     int irq;
 
     dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);
@@ -85,14 +93,21 @@ static int chiplets_uio_probe(struct platform_device *pdev)
     dev->info.handler = chiplets_uio_irq;
     dev->info.irqcontrol = chiplets_uio_irqcontrol;
     dev->info.priv = dev;
+
+    mmio_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
     dev->info.mem[0].name = "mmio";
-    dev->info.mem[0].addr = CHIPLET_UIO_MMIO_BASE +
-                             dev->index * CHIPLET_UIO_MMIO_SIZE;
-    dev->info.mem[0].size = CHIPLET_UIO_MMIO_SIZE;
+    dev->info.mem[0].addr = mmio_res ? mmio_res->start :
+                             CHIPLET_UIO_MMIO_BASE +
+                                 dev->index * CHIPLET_UIO_MMIO_SIZE;
+    dev->info.mem[0].size = mmio_res ? resource_size(mmio_res) :
+                             CHIPLET_UIO_MMIO_SIZE;
     dev->info.mem[0].memtype = UIO_MEM_PHYS;
+
+    dma_res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
     dev->info.mem[1].name = "frontend-ram";
-    dev->info.mem[1].addr = CHIPLET_UIO_DMA_BASE;
-    dev->info.mem[1].size = CHIPLET_UIO_DMA_SIZE;
+    dev->info.mem[1].addr = dma_res ? dma_res->start : CHIPLET_UIO_DMA_BASE;
+    dev->info.mem[1].size = dma_res ? resource_size(dma_res) :
+                             CHIPLET_UIO_DMA_SIZE;
     dev->info.mem[1].memtype = UIO_MEM_PHYS;
 
     platform_set_drvdata(pdev, dev);
@@ -105,14 +120,21 @@ static const struct acpi_device_id chiplets_uio_acpi_ids[] = {
 };
 MODULE_DEVICE_TABLE(acpi, chiplets_uio_acpi_ids);
 
+static const struct of_device_id chiplets_uio_of_ids[] = {
+    { .compatible = "chiplets,uio" },
+    { }
+};
+MODULE_DEVICE_TABLE(of, chiplets_uio_of_ids);
+
 static struct platform_driver chiplets_uio_driver = {
     .probe = chiplets_uio_probe,
     .driver = {
         .name = "chiplets-uio",
         .acpi_match_table = chiplets_uio_acpi_ids,
+        .of_match_table = chiplets_uio_of_ids,
     },
 };
 module_platform_driver(chiplets_uio_driver);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Chiplets x86_64 UIO smoke-test platform driver");
+MODULE_DESCRIPTION("Chiplets UIO smoke-test platform driver");

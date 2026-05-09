@@ -22,6 +22,7 @@ struct uio_config {
     char path[256]; ///< `/dev/uioX` character device path.
     uint64_t
         irq_control_offset; ///< Resource0 offset used to signal frontend IRQs.
+    uint64_t dma_base;      ///< Frontend guest physical address of DMA map0.
 };
 
 /** @brief One mmap()ed UIO resource. */
@@ -118,7 +119,7 @@ static bool read_sysfs_u64(const char *path, uint64_t *out) {
  * Endpoint form:
  *
  * ```text
- * uio:/dev/uioX[:irq-control-offset]
+ * uio:/dev/uioX[:irq-control-offset[:dma-base]]
  * ```
  *
  * @param endpoint Endpoint string from the backend device descriptor.
@@ -127,11 +128,14 @@ static bool read_sysfs_u64(const char *path, uint64_t *out) {
  */
 static bool parse_endpoint(const char *endpoint, struct uio_config *config) {
     const char *value = endpoint;
+    char offset_buf[64];
     const char *offset;
+    const char *dma_base;
     size_t len;
 
     snprintf(config->path, sizeof(config->path), "/dev/uio0");
     config->irq_control_offset = UIO_IRQ_CONTROL_OFFSET;
+    config->dma_base = 0;
 
     if (!value || !value[0]) {
         return false;
@@ -148,11 +152,32 @@ static bool parse_endpoint(const char *endpoint, struct uio_config *config) {
     memcpy(config->path, value, len);
     config->path[len] = '\0';
 
-    if (offset && !parse_u64(offset + 1, &config->irq_control_offset)) {
-        return false;
+    if (offset) {
+        dma_base = strchr(offset + 1, ':');
+        len = dma_base ? (size_t)(dma_base - offset - 1) : strlen(offset + 1);
+        if (!len || len >= sizeof(offset_buf)) {
+            return false;
+        }
+        memcpy(offset_buf, offset + 1, len);
+        offset_buf[len] = '\0';
+        if (!parse_u64(offset_buf, &config->irq_control_offset)) {
+            return false;
+        }
+        if (dma_base && !parse_u64(dma_base + 1, &config->dma_base)) {
+            return false;
+        }
     }
 
     return true;
+}
+
+/** @brief Converts frontend GPA to an offset into the mapped DMA aperture. */
+static bool dma_offset(uint64_t gpa, uint32_t len, uint64_t *offset) {
+    if (gpa < g_uio.config.dma_base) {
+        return false;
+    }
+    *offset = gpa - g_uio.config.dma_base;
+    return *offset <= g_uio.dma.size && len <= g_uio.dma.size - *offset;
 }
 
 /**
@@ -500,19 +525,21 @@ bool fabric_run(struct fabric *fabric) {
  */
 bool fabric_dma_read(struct fabric_io *io, uint64_t gpa, uint32_t len,
                      uint8_t **data) {
+    uint64_t offset;
+
     (void)io;
     *data = NULL;
     if (!len) {
         return true;
     }
-    if (gpa > g_uio.dma.size || len > g_uio.dma.size - gpa) {
+    if (!dma_offset(gpa, len, &offset)) {
         return false;
     }
     *data = malloc(len);
     if (!*data) {
         return false;
     }
-    memcpy(*data, g_uio.dma.addr + gpa, len);
+    memcpy(*data, g_uio.dma.addr + offset, len);
     return true;
 }
 
@@ -546,14 +573,16 @@ bool fabric_dma_read_u16(struct fabric_io *io, uint64_t gpa, uint16_t *value) {
  */
 bool fabric_dma_write(struct fabric_io *io, uint64_t gpa, const void *data,
                       uint32_t len) {
+    uint64_t offset;
+
     (void)io;
     if (!len) {
         return true;
     }
-    if (gpa > g_uio.dma.size || len > g_uio.dma.size - gpa) {
+    if (!dma_offset(gpa, len, &offset)) {
         return false;
     }
-    memcpy(g_uio.dma.addr + gpa, data, len);
+    memcpy(g_uio.dma.addr + offset, data, len);
     return true;
 }
 

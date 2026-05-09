@@ -16,19 +16,51 @@ from pathlib import Path
 MEMORY_SIZE = 512 * 1024 * 1024
 MEMORY_ARG = "512M"
 MMIO_SIZE = 0x1000
-FRONTEND_BLK_BASE = 0x0010_FEB0_0000
-FRONTEND_CON_BASE = 0x0010_FEB0_1000
-BACKEND_BLK_BASE = 0x0000_FEB0_0000
-BACKEND_CON_BASE = 0x0000_FEB0_1000
-BACKEND_DMA_BASE = 0x3000_0000
-BLK_IRQ = 16
-CON_IRQ = 17
+ARCH_CONFIGS = {
+    "x64": {
+        "description": "x86_64",
+        "qemu": "out/qemu-x64-minimal/bin/qemu-system-x86_64",
+        "machine": "microvm,pcie=off,ioapic2=on,virtio-mmio-transports=0,memory-backend=guestmem",
+        "append": "console=ttyS0 root=/dev/ram0 rdinit=/linuxrc loglevel=8",
+        "cpu_args": [],
+        "frontend_blk_base": 0x0010_FEB0_0000,
+        "frontend_con_base": 0x0010_FEB0_1000,
+        "backend_blk_base": 0x0000_FEB0_0000,
+        "backend_con_base": 0x0000_FEB0_1000,
+        "backend_dma_base": 0x3000_0000,
+        "frontend_ram_base": 0x0,
+        "blk_irq": 16,
+        "con_irq": 17,
+    },
+    "a64": {
+        "description": "ARM64",
+        "qemu": "out/qemu-arm64-default/bin/qemu-system-aarch64",
+        "machine": "virt,highmem-mmio=on,highmem-mmio-size=1T,gic-version=3,acpi=off,memory-backend=guestmem",
+        "append": "console=ttyAMA0 root=/dev/ram0 rdinit=/linuxrc loglevel=8",
+        "cpu_args": ["-cpu", "max"],
+        "frontend_blk_base": 0x0010_FEB0_0000,
+        "frontend_con_base": 0x0010_FEB0_1000,
+        "backend_blk_base": 0x0000_FEB0_0000,
+        "backend_con_base": 0x0000_FEB0_1000,
+        "backend_dma_base": 0x3000_0000,
+        "frontend_ram_base": 0x4000_0000,
+        "blk_irq": 48,
+        "con_irq": 49,
+    },
+}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the x86_64 two-VM UIO tests")
+    parser = argparse.ArgumentParser(description="Run the two-VM UIO tests")
+    parser.add_argument("--arch", choices=tuple(ARCH_CONFIGS), default="x64")
+    parser.add_argument("--frontend-arch", choices=tuple(ARCH_CONFIGS))
+    parser.add_argument("--backend-arch", choices=tuple(ARCH_CONFIGS))
     parser.add_argument("--kernel", required=True)
     parser.add_argument("--initrd", required=True)
+    parser.add_argument("--frontend-kernel")
+    parser.add_argument("--frontend-initrd")
+    parser.add_argument("--backend-kernel")
+    parser.add_argument("--backend-initrd")
     parser.add_argument("--timeout", type=float, default=45.0)
     parser.add_argument("--run-dir")
     parser.add_argument("--mode", choices=("smoke", "benchmark"), default="smoke")
@@ -70,26 +102,29 @@ def qemu_data_dir(qemu_bin: Path) -> Path:
 
 
 def common_qemu_args(qemu_bin: Path, kernel: Path, initrd: Path, ram_path: Path,
-                     append: str) -> list[str]:
-    return [
+                     config: dict[str, object]) -> list[str]:
+    args = [
         str(qemu_bin),
         "-L",
         str(qemu_data_dir(qemu_bin)),
         "-object",
         f"memory-backend-file,id=guestmem,mem-path={ram_path},size={MEMORY_ARG},share=on",
         "-machine",
-        "microvm,pcie=off,ioapic2=on,virtio-mmio-transports=0,memory-backend=guestmem",
+        str(config["machine"]),
         "-m",
         MEMORY_ARG,
-        "-enable-kvm",
         "-nographic",
         "-kernel",
         str(kernel),
         "-initrd",
         str(initrd),
         "-append",
-        append,
+        str(config["append"]),
     ]
+    args[7:7] = list(config["cpu_args"])
+    if config is ARCH_CONFIGS["x64"]:
+        args.insert(7, "-enable-kvm")
+    return args
 
 
 def memory_object_args(name: str, path: Path, size: int) -> list[str]:
@@ -100,7 +135,8 @@ def memory_object_args(name: str, path: Path, size: int) -> list[str]:
 
 
 def axi_device_arg(name: str, base: int, irq: int, memdev: str, control: Path,
-                   role: str, virtio_node: bool, dma_memdev: str | None = None) -> str:
+                   role: str, virtio_node: bool, dma_base: int,
+                   dma_memdev: str | None = None) -> str:
     parts = [
         "axi",
         f"id={name}",
@@ -116,7 +152,7 @@ def axi_device_arg(name: str, base: int, irq: int, memdev: str, control: Path,
     if dma_memdev:
         parts.extend([
             f"dma-memdev={dma_memdev}",
-            f"dma-base=0x{BACKEND_DMA_BASE:x}",
+            f"dma-base=0x{dma_base:x}",
             f"dma-size={MEMORY_SIZE}",
         ])
     return ",".join(parts)
@@ -194,9 +230,16 @@ def terminate(processes: list[subprocess.Popen]) -> None:
 def main() -> int:
     args = parse_args()
     workspace = Path.cwd()
-    kernel = Path(args.kernel)
-    initrd = Path(args.initrd)
-    qemu_bin = workspace / "out/qemu-x64-minimal/bin/qemu-system-x86_64"
+    frontend_arch = args.frontend_arch or args.arch
+    backend_arch = args.backend_arch or args.arch
+    frontend_config = ARCH_CONFIGS[frontend_arch]
+    backend_config = ARCH_CONFIGS[backend_arch]
+    frontend_kernel = Path(args.frontend_kernel or args.kernel)
+    frontend_initrd = Path(args.frontend_initrd or args.initrd)
+    backend_kernel = Path(args.backend_kernel or args.kernel)
+    backend_initrd = Path(args.backend_initrd or args.initrd)
+    frontend_qemu_bin = workspace / str(frontend_config["qemu"])
+    backend_qemu_bin = workspace / str(backend_config["qemu"])
     if args.bench_size_mb <= 0:
         raise ValueError("--bench-size-mb must be greater than zero")
     bench_bs_bytes = parse_block_size(args.bench_bs)
@@ -207,9 +250,11 @@ def main() -> int:
     if bench_count <= 0:
         raise ValueError("--bench-size-mb is smaller than --bench-bs")
 
-    prefix = "uio-x64-bench." if args.mode == "benchmark" else "uio-x64-smoke."
+    arch_label = frontend_arch if frontend_arch == backend_arch else f"{backend_arch}-backend-{frontend_arch}-frontend"
+    prefix = f"uio-{arch_label}-bench." if args.mode == "benchmark" else f"uio-{arch_label}-smoke."
     run_dir = Path(args.run_dir) if args.run_dir else Path(tempfile.mkdtemp(prefix=prefix, dir=os.environ.get("TMPDIR", "/tmp")))
     run_dir.mkdir(parents=True, exist_ok=True)
+    include_console = frontend_arch != "a64" or args.mode != "benchmark"
 
     frontend_ram = run_dir / "frontend.ram"
     backend_ram = run_dir / "backend.ram"
@@ -226,11 +271,11 @@ def main() -> int:
         truncate(path, size)
 
     frontend_args = common_qemu_args(
-        qemu_bin,
-        kernel,
-        initrd,
+        frontend_qemu_bin,
+        frontend_kernel,
+        frontend_initrd,
         frontend_ram,
-        "console=ttyS0 root=/dev/ram0 rdinit=/linuxrc loglevel=8",
+        frontend_config,
     )
     frontend_args.extend([
         "-S",
@@ -238,30 +283,50 @@ def main() -> int:
         f"unix:{qmp},server=on,wait=off",
     ])
     frontend_args.extend(memory_object_args("blkmmio", blk_mmio, MMIO_SIZE))
-    frontend_args.extend(memory_object_args("conmmio", con_mmio, MMIO_SIZE))
+    if include_console:
+        frontend_args.extend(memory_object_args("conmmio", con_mmio, MMIO_SIZE))
     frontend_args.extend([
         "-device",
-        axi_device_arg("blk0", FRONTEND_BLK_BASE, BLK_IRQ, "blkmmio", blk_control, "frontend", True),
-        "-device",
-        axi_device_arg("con0", FRONTEND_CON_BASE, CON_IRQ, "conmmio", con_control, "frontend", True),
+        axi_device_arg("blk0", int(frontend_config["frontend_blk_base"]),
+                       int(frontend_config["blk_irq"]),
+                       "blkmmio", blk_control, "frontend", True,
+                       int(backend_config["backend_dma_base"])),
     ])
+    if include_console:
+        frontend_args.extend([
+            "-device",
+            axi_device_arg("con0", int(frontend_config["frontend_con_base"]),
+                           int(frontend_config["con_irq"]),
+                           "conmmio", con_control, "frontend", True,
+                           int(backend_config["backend_dma_base"])),
+        ])
 
     backend_args = common_qemu_args(
-        qemu_bin,
-        kernel,
-        initrd,
+        backend_qemu_bin,
+        backend_kernel,
+        backend_initrd,
         backend_ram,
-        "console=ttyS0 root=/dev/ram0 rdinit=/linuxrc loglevel=8",
+        backend_config,
     )
     backend_args.extend(memory_object_args("blkmmio", blk_mmio, MMIO_SIZE))
-    backend_args.extend(memory_object_args("conmmio", con_mmio, MMIO_SIZE))
+    if include_console:
+        backend_args.extend(memory_object_args("conmmio", con_mmio, MMIO_SIZE))
     backend_args.extend(memory_object_args("frontendram", frontend_ram, MEMORY_SIZE))
     backend_args.extend([
         "-device",
-        axi_device_arg("blk0", BACKEND_BLK_BASE, BLK_IRQ, "blkmmio", blk_control, "backend", False, "frontendram"),
-        "-device",
-        axi_device_arg("con0", BACKEND_CON_BASE, CON_IRQ, "conmmio", con_control, "backend", False, "frontendram"),
+        axi_device_arg("blk0", int(backend_config["backend_blk_base"]),
+                       int(backend_config["blk_irq"]),
+                       "blkmmio", blk_control, "backend", False,
+                       int(backend_config["backend_dma_base"]), "frontendram"),
     ])
+    if include_console:
+        backend_args.extend([
+            "-device",
+            axi_device_arg("con0", int(backend_config["backend_con_base"]),
+                           int(backend_config["con_irq"]),
+                           "conmmio", con_control, "backend", False,
+                           int(backend_config["backend_dma_base"]), "frontendram"),
+        ])
 
     processes: list[subprocess.Popen] = []
     logs = []
@@ -277,18 +342,29 @@ def main() -> int:
         activate_shell(backend, backend_log, args.timeout)
 
         image_size_mb = max(64, args.bench_size_mb)
-        backend_script = f"""
+        uio_blk_endpoint = f"uio:/dev/uio0:0x200:0x{int(frontend_config['frontend_ram_base']):x}"
+        uio_con_endpoint = f"uio:/dev/uio1:0x200:0x{int(frontend_config['frontend_ram_base']):x}"
+        if include_console:
+            backend_script = f"""
 while [ ! -e /dev/uio0 ] || [ ! -e /dev/uio1 ]; do mdev -s; sleep 1; done
 dd if=/dev/zero of=/blk0.img bs=1M count={image_size_mb}
-/bin/virtio-blkd 'name=blk0,socket=uio:/dev/uio0,image=/blk0.img,readonly=false,ram_access=shared-mem' &
-/bin/virtio-consoled 'name=con0,socket=uio:/dev/uio1,output=-,ram_access=shared-mem' &
+/bin/virtio-blkd 'name=blk0,socket={uio_blk_endpoint},image=/blk0.img,readonly=false,ram_access=shared-mem' &
+/bin/virtio-consoled 'name=con0,socket={uio_con_endpoint},output=-,ram_access=shared-mem' &
+echo UIO_BACKEND_READY
+wait
+"""
+        else:
+            backend_script = f"""
+while [ ! -e /dev/uio0 ]; do mdev -s; sleep 1; done
+dd if=/dev/zero of=/blk0.img bs=1M count={image_size_mb}
+/bin/virtio-blkd 'name=blk0,socket={uio_blk_endpoint},image=/blk0.img,readonly=false,ram_access=shared-mem' &
 echo UIO_BACKEND_READY
 wait
 """
         write_guest(backend, backend_script)
         if not wait_log(backend_log, "blkd: serving UIO device", args.timeout):
             raise TimeoutError("backend block UIO daemon did not start")
-        if not wait_log(backend_log, "cond: serving UIO device", args.timeout):
+        if include_console and not wait_log(backend_log, "cond: serving UIO device", args.timeout):
             raise TimeoutError("backend console UIO daemon did not start")
 
         qmp_continue(qmp, 5.0)
@@ -357,13 +433,14 @@ echo UIO_SMOKE_TEST_DONE
                   f"write={backend_text.count('request type=1')} "
                   f"flush={backend_text.count('request type=4')}")
         else:
-            print("uio backend/frontend smoke test passed")
+            print(f"{backend_config['description']} backend / "
+                  f"{frontend_config['description']} frontend UIO smoke test passed")
         print(f"run dir: {run_dir}")
         print(f"frontend log: {frontend_log}")
         print(f"backend log:  {backend_log}")
         return 0
     except Exception as exc:
-        print(f"chiplets-uio-x64: {exc}", file=sys.stderr)
+        print(f"chiplets-uio-{arch_label}: {exc}", file=sys.stderr)
         print(f"run dir: {run_dir}", file=sys.stderr)
         print(f"frontend log: {frontend_log}", file=sys.stderr)
         print(f"backend log:  {backend_log}", file=sys.stderr)
@@ -373,8 +450,10 @@ echo UIO_SMOKE_TEST_DONE
         for log in logs:
             log.close()
         if args.run_dir and os.environ.get("CHIPLETS_KEEP_UIO_RUN_DIR") != "1":
-            for path in (frontend_ram, backend_ram, blk_mmio, con_mmio,
-                         blk_control, con_control, qmp):
+            cleanup_paths = [frontend_ram, backend_ram, blk_mmio, blk_control, qmp]
+            if include_console:
+                cleanup_paths.extend([con_mmio, con_control])
+            for path in cleanup_paths:
                 try:
                     path.unlink()
                 except FileNotFoundError:

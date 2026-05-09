@@ -61,7 +61,7 @@ new file mode 100644
 index 0000000000..14521bdf7f
 --- /dev/null
 +++ b/hw/misc/axi.c
-@@ -0,0 +1,811 @@
+@@ -0,0 +1,841 @@
 +/*
 + * Emulated AXI fabric proxy device.
 + *
@@ -97,6 +97,8 @@ index 0000000000..14521bdf7f
 +OBJECT_DECLARE_SIMPLE_TYPE(AxiState, AXI)
 +
 +#define AXI_CONTROL_IRQ_OFFSET 0x200
++#define AXI_UIO_NOTIFY_DELAY_US 50000
++#define AXI_UIO_IRQ_PULSE_US 10000
 +
 +typedef enum AxiMode {
 +    AXI_MODE_SOCKET,
@@ -232,7 +234,7 @@ index 0000000000..14521bdf7f
 +    case AXI_MSG_FRONTEND_NOTIFY:
 +        if (s->irq) {
 +            qemu_set_irq(s->irq, 1);
-+            g_usleep(1000);
++            g_usleep(AXI_UIO_IRQ_PULSE_US);
 +            qemu_set_irq(s->irq, 0);
 +        }
 +        break;
@@ -558,7 +560,7 @@ index 0000000000..14521bdf7f
 +    }
 +    if (s->role_value == AXI_ROLE_FRONTEND) {
 +        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
-+        g_usleep(10000);
++        g_usleep(AXI_UIO_NOTIFY_DELAY_US);
 +    }
 +    memcpy(&value, s->shared_mmio + addr, size);
 +    return value;
@@ -593,7 +595,7 @@ index 0000000000..14521bdf7f
 +
 +    if (s->role_value == AXI_ROLE_FRONTEND) {
 +        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
-+        g_usleep(10000);
++        g_usleep(AXI_UIO_NOTIFY_DELAY_US);
 +    } else if (s->role_value == AXI_ROLE_BACKEND &&
 +               addr == AXI_CONTROL_IRQ_OFFSET) {
 +        axi_control_send(s, value ? AXI_MSG_FRONTEND_IRQ_ASSERT
@@ -714,6 +716,33 @@ index 0000000000..14521bdf7f
 +    qemu_fdt_setprop(ms->fdt, nodename, "dma-coherent", NULL, 0);
 +}
 +
++static void axi_add_virt_uio_fdt_node(VirtMachineState *vms, AxiState *s)
++{
++    MachineState *ms = MACHINE(vms);
++    g_autofree char *nodename = NULL;
++
++    if (s->virtio_node || s->mode_value != AXI_MODE_UIO ||
++        s->role_value != AXI_ROLE_BACKEND || !ms->fdt) {
++        return;
++    }
++
++    nodename = g_strdup_printf("/chiplets_uio@%" PRIx64, s->base);
++    qemu_fdt_add_subnode(ms->fdt, nodename);
++    qemu_fdt_setprop_string(ms->fdt, nodename, "compatible", "chiplets,uio");
++    if (s->dma_size) {
++        qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg",
++                                     2, s->base, 2, s->size,
++                                     2, s->dma_base, 2, s->dma_size);
++    } else {
++        qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg",
++                                     2, s->base, 2, s->size);
++    }
++    qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupts",
++                           GIC_FDT_IRQ_TYPE_SPI, s->irq_num,
++                           GIC_FDT_IRQ_FLAGS_EDGE_LO_HI);
++    qemu_fdt_setprop(ms->fdt, nodename, "dma-coherent", NULL, 0);
++}
++
 +static bool axi_realize_arm_virt(AxiState *s, Error **errp)
 +{
 +    Object *machine = qdev_get_machine();
@@ -731,6 +760,7 @@ index 0000000000..14521bdf7f
 +
 +    s->irq = qdev_get_gpio_in(vms->gic, s->irq_num);
 +    axi_add_virt_fdt_node(vms, s);
++    axi_add_virt_uio_fdt_node(vms, s);
 +    return true;
 +}
 +

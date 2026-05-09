@@ -10,6 +10,7 @@
   let
     pkgs = import nixpkgs { system = "x86_64-linux"; };
     pkgsArm64 = import nixpkgs { system = "aarch64-linux"; };
+    pkgsCrossArm64 = pkgs.pkgsCross.aarch64-multiplatform;
 
     build-initrc = modules: pkgs.writeScript "make-initrc" ''
       #!/bin/sh
@@ -28,11 +29,13 @@
       for module in virtio virtio_ring virtio_mmio virtio_blk virtio_console uio; do
         modprobe "$module" 2>/dev/null || true
       done
+      modprobe uio_pdrv_genirq of_id=chiplets,uio 2>/dev/null || true
 
       for pass in 1 2 3; do
         while read -r i; do
           if [ -e "/$i" ]; then
             case "$i" in
+              *uio_pdrv_genirq.ko) insmod "/$i" of_id=chiplets,uio 2>/dev/null || true ;;
               *) insmod "/$i" 2>/dev/null || true ;;
             esac
           fi
@@ -68,7 +71,8 @@
           virtio_mmio.ko.xz \
           virtio_blk.ko.xz \
           virtio_console.ko.xz \
-          uio.ko.xz; do
+          uio.ko.xz \
+          uio_pdrv_genirq.ko.xz; do
           path=$(find . -name "$name" -print -quit)
           [ -n "$path" ] && copy_module "$path"
         done
@@ -165,12 +169,78 @@ EOF
         --initrd "$initrd" \
         "$@"
     '';
+    runuio-a64 = pkgs.writeShellScriptBin "runuio-a64" ''
+      set -euo pipefail
+
+      work_tmp=$(${pkgs.coreutils}/bin/mktemp -d "''${TMPDIR:-/tmp}/chiplets-uio-a64.XXXXXX")
+      cleanup() {
+        ${pkgs.coreutils}/bin/chmod -R u+w "$work_tmp" 2>/dev/null || true
+        ${pkgs.coreutils}/bin/rm -rf "$work_tmp"
+      }
+      trap cleanup EXIT
+
+      build_dir="$work_tmp/build"
+      out_dir="$work_tmp/out"
+      ${pkgs.cmake}/bin/cmake -S "$PWD" -B "$build_dir" -G Ninja \
+        -DCMAKE_MAKE_PROGRAM=${pkgs.ninja}/bin/ninja \
+        -DCHIPLETS_FETCH_QEMU=OFF \
+        -DCHIPLETS_BACKEND_FABRIC=uio \
+        -DCMAKE_SYSTEM_NAME=Linux \
+        -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+        -DCMAKE_C_COMPILER=${pkgsCrossArm64.stdenv.cc}/bin/aarch64-unknown-linux-gnu-gcc \
+        -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$out_dir"
+      ${pkgs.cmake}/bin/cmake --build "$build_dir" --target virtio-blkd virtio-consoled --parallel
+
+      tmp="$work_tmp/initrd"
+      ${pkgs.coreutils}/bin/mkdir -p "$tmp"
+
+      ${pkgs.gzip}/bin/gzip -dc ${build-initrd pkgsArm64.linuxPackages_latest.kernel pkgsArm64.pkgsStatic.busybox "lib/modules/${pkgsArm64.linuxPackages_latest.kernel.modDirVersion}/kernel" } |
+        (cd "$tmp" && ${pkgs.cpio}/bin/cpio -id --quiet)
+      ${pkgs.coreutils}/bin/chmod -R u+w "$tmp"
+
+      ${pkgs.coreutils}/bin/mkdir -p "$tmp/bin"
+      ${pkgs.coreutils}/bin/cp "$out_dir/virtio-blkd" "$tmp/bin/virtio-blkd"
+      ${pkgs.coreutils}/bin/cp "$out_dir/virtio-consoled" "$tmp/bin/virtio-consoled"
+      for libdir in ${pkgsCrossArm64.glibc}/lib ${pkgsCrossArm64.stdenv.cc.cc.lib}/lib; do
+        dst="$tmp/$libdir"
+        ${pkgs.coreutils}/bin/mkdir -p "$dst"
+        ${pkgs.coreutils}/bin/cp -P "$libdir"/*.so* "$dst"/
+      done
+
+      initrd="$tmp/uio-initrd.gz"
+      (cd "$tmp" && ${pkgs.findutils}/bin/find . -print0 |
+        ${pkgs.cpio}/bin/cpio --null -ov --owner=0:0 --format=newc |
+        ${pkgs.gzip}/bin/gzip -9 > "$initrd") >/dev/null 2>&1
+
+      exec ${pkgs.python3}/bin/python3 "$PWD/scripts/chiplets-uio-x64.py" \
+        --arch a64 \
+        --kernel ${pkgsArm64.linuxPackages_latest.kernel}/Image \
+        --initrd "$initrd" \
+        "$@"
+    '';
+    runuio-a64-backend-x64-frontend = pkgs.writeShellScriptBin "runuio-a64-backend-x64-frontend" ''
+      exec ${runuio-a64}/bin/runuio-a64 \
+        --frontend-arch x64 \
+        --frontend-kernel ${pkgs.linuxPackages_latest.kernel}/bzImage \
+        --frontend-initrd ${build-initrd pkgs.linuxPackages_latest.kernel pkgs.pkgsStatic.busybox "lib/modules/${pkgs.linuxPackages_latest.kernel.modDirVersion}/kernel" } \
+        "$@"
+    '';
+    runuio-x64-backend-a64-frontend = pkgs.writeShellScriptBin "runuio-x64-backend-a64-frontend" ''
+      exec ${runuio-x64}/bin/runuio-x64 \
+        --frontend-arch a64 \
+        --frontend-kernel ${pkgsArm64.linuxPackages_latest.kernel}/Image \
+        --frontend-initrd ${build-initrd pkgsArm64.linuxPackages_latest.kernel pkgsArm64.pkgsStatic.busybox "lib/modules/${pkgsArm64.linuxPackages_latest.kernel.modDirVersion}/kernel" } \
+        "$@"
+    '';
   in
   {
 
     packages.x86_64-linux.runvm-x64 = runvm-x64;
     packages.x86_64-linux.runvm-a64 = runvm-a64;
     packages.x86_64-linux.runuio-x64 = runuio-x64;
+    packages.x86_64-linux.runuio-a64 = runuio-a64;
+    packages.x86_64-linux.runuio-a64-backend-x64-frontend = runuio-a64-backend-x64-frontend;
+    packages.x86_64-linux.runuio-x64-backend-a64-frontend = runuio-x64-backend-a64-frontend;
     packages.x86_64-linux.x64 = runvm-x64;
     packages.x86_64-linux.a64 = runvm-a64;
     packages.x86_64-linux.default = runvm-x64;

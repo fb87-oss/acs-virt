@@ -7,7 +7,7 @@ if [ ! -d "$tmp_root" ] || [ ! -w "$tmp_root" ]; then
   tmp_root=/tmp
 fi
 
-run_dir=$(mktemp -d "$tmp_root/uio-a64-smoke.XXXXXX")
+run_dir=$(mktemp -d "$tmp_root/uio-x64-backend-a64-frontend.XXXXXX")
 
 cleanup() {
   :
@@ -15,7 +15,7 @@ cleanup() {
 
 interrupt() {
   trap - EXIT
-  printf '\033[2K\rinterrupted, stopping ARM64 UIO test\n' >&2
+  printf '\033[2K\rinterrupted, stopping mixed UIO test\n' >&2
   cleanup
   exit 130
 }
@@ -23,4 +23,7 @@ interrupt() {
 trap cleanup EXIT
 trap interrupt INT TERM
 
-nix run .#runuio-a64 -- --mode smoke --timeout "$guest_timeout" --run-dir "$run_dir"
+nix run .#runuio-x64-backend-a64-frontend -- \
+  --mode smoke \
+  --timeout "$guest_timeout" \
+  --run-dir "$run_dir"
