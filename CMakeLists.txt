@@ -79,6 +79,11 @@ add_executable(virtio-consoled
 target_link_libraries(virtio-consoled PRIVATE project_warnings)
 target_link_libraries(virtio-consoled PRIVATE fabric virtio_mmio virtio)
 
+add_executable(uio-membench
+  src/tools/uio-membench.c
+)
+target_link_libraries(uio-membench PRIVATE project_warnings)
+
 add_executable(c-backend-tests
   tests/c-backend-tests.c
   src/drivers/virtio-blkd.c
@@ -89,7 +94,7 @@ target_compile_definitions(c-backend-tests PRIVATE BACKEND_TEST)
 target_link_libraries(c-backend-tests PRIVATE project_warnings ctest_header fabric virtio_mmio virtio)
 add_test(NAME c-backend-tests COMMAND c-backend-tests)
 
-install(TARGETS virtio-blkd virtio-consoled c-backend-tests RUNTIME DESTINATION bin)
+install(TARGETS virtio-blkd virtio-consoled uio-membench c-backend-tests RUNTIME DESTINATION bin)
 
 if(CHIPLETS_FETCH_QEMU)
   include(${CHIPLETS_QEMU_TARGET_FILE})

@@ -73,7 +73,7 @@ base=<guest physical MMIO base>
 size=<MMIO window size>
 irq=<x86 GSI number or ARM GIC SPI number>
 mode=<socket|uio>
-role=<frontend|backend>
+role=<slave|master>
 socket=<Unix socket path>
 control-socket=<UIO control socket path>
 ram-access=<shared-mem|qemu-mediated>
@@ -82,7 +82,6 @@ memdev=<MMIO memory-backend object>
 dma-memdev=<frontend RAM memory-backend object>
 dma-base=<backend guest physical base for the frontend RAM aperture>
 dma-size=<frontend RAM size>
-virtio-node=<on|off>
 notify-delay-us=<frontend notify delay>
 notify-ack=<on|off>
 ```
@@ -97,12 +96,12 @@ Socket-mode example:
 UIO-mode paired example:
 
 ```text
--device axi,id=blk0,mode=uio,role=frontend,base=0x20feb00000,size=0x1000,
+-device axi,id=blk0,mode=uio,role=slave,base=0x20feb00000,size=0x1000,
   irq=16,memdev=blkmmio,control-socket=/tmp/.../blk.control.sock,
-  virtio-node=on,notify-delay-us=13000,notify-ack=on
--device axi,id=blk0,mode=uio,role=backend,base=0x10feb00000,size=0x1000,
+  notify-delay-us=13000,notify-ack=on
+-device axi,id=blk0,mode=uio,role=master,base=0x10feb00000,size=0x1000,
   irq=16,memdev=blkmmio,control-socket=/tmp/.../blk.control.sock,
-  virtio-node=off,dma-memdev=frontendram,dma-base=0x1000000000,
+  dma-memdev=frontendram,dma-base=0x1000000000,
   dma-size=536870912
 ```
 
@@ -123,9 +122,8 @@ _CRS = Memory32Fixed(<base>, <size>) + Interrupt(edge, active-high, <gsi>)
 
 For AArch64 `virt`, the patch creates FDT nodes:
 
-- `virtio,mmio` for frontend discovery when `virtio-node=on`.
-- `chiplets,uio` for backend UIO discovery when `mode=uio`, `role=backend`, and
-  `virtio-node=off`.
+- `virtio,mmio` for slave/frontend discovery.
+- `chiplets,uio` for master/backend UIO discovery when `mode=uio`.
 
 ## Data Paths
 

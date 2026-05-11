@@ -60,7 +60,7 @@ only MMIO trapping, guest RAM exposure or mediation, and IRQ injection.
 ## UIO Distinction
 
 In UIO mode the QEMU `axi` devices are launched with properties such as
-`mode=uio`, `role=frontend|backend`, `control-socket=...`, `memdev=...`, and
+`mode=uio`, `role=slave|master`, `control-socket=...`, `memdev=...`, and
 `dma-memdev=...`. Frontend and backend QEMU processes share host-backed files for
 the virtio-mmio window and frontend RAM. The backend daemon talks to Linux UIO
 resources instead of this socket protocol, so `DMA_READ` and `DMA_WRITE` messages

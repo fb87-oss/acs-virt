@@ -162,6 +162,7 @@ EOF
       ${pkgs.coreutils}/bin/mkdir -p "$tmp/bin"
       ${pkgs.coreutils}/bin/cp "$PWD/out/virtio-blkd" "$tmp/bin/virtio-blkd"
       ${pkgs.coreutils}/bin/cp "$PWD/out/virtio-consoled" "$tmp/bin/virtio-consoled"
+      ${pkgs.coreutils}/bin/cp "$PWD/out/uio-membench" "$tmp/bin/uio-membench"
 
       copy_deps() {
         local bin=$1
@@ -178,6 +179,7 @@ EOF
       }
       copy_deps "$PWD/out/virtio-blkd"
       copy_deps "$PWD/out/virtio-consoled"
+      copy_deps "$PWD/out/uio-membench"
 
       initrd="$tmp/uio-initrd.gz"
       (cd "$tmp" && ${pkgs.findutils}/bin/find . -print0 |

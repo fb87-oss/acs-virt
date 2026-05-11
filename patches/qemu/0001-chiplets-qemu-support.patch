@@ -169,7 +169,7 @@ new file mode 100644
 index 0000000000..14521bdf7f
 --- /dev/null
 +++ b/hw/misc/axi.c
-@@ -0,0 +1,932 @@
+@@ -0,0 +1,929 @@
 +/*
 + * Emulated AXI fabric proxy device.
 + *
@@ -214,8 +214,8 @@ index 0000000000..14521bdf7f
 +} AxiMode;
 +
 +typedef enum AxiRole {
-+    AXI_ROLE_FRONTEND,
-+    AXI_ROLE_BACKEND,
++    AXI_ROLE_SLAVE,
++    AXI_ROLE_MASTER,
 +} AxiRole;
 +
 +typedef enum AxiRamAccess {
@@ -280,7 +280,6 @@ index 0000000000..14521bdf7f
 +    uint32_t notify_seq;
 +    uint32_t notify_ack_seq;
 +    bool socket_error_reported;
-+    bool virtio_node;
 +    bool notify_ack;
 +    qemu_irq irq;
 +};
@@ -743,7 +742,7 @@ index 0000000000..14521bdf7f
 +    if (addr + size > s->size) {
 +        return 0;
 +    }
-+    if (s->role_value == AXI_ROLE_FRONTEND) {
++    if (s->role_value == AXI_ROLE_SLAVE) {
 +        if (s->notify_ack) {
 +            axi_wait_for_notify_ack(s);
 +        } else {
@@ -765,7 +764,7 @@ index 0000000000..14521bdf7f
 +    }
 +    memcpy(s->shared_mmio + addr, &value, size);
 +
-+    if (s->role_value == AXI_ROLE_FRONTEND &&
++    if (s->role_value == AXI_ROLE_SLAVE &&
 +        addr == VIRTIO_MMIO_QUEUE_SEL) {
 +        static const hwaddr queue_offsets[] = {
 +            VIRTIO_MMIO_QUEUE_NUM,        VIRTIO_MMIO_QUEUE_READY,
@@ -782,14 +781,14 @@ index 0000000000..14521bdf7f
 +        }
 +    }
 +
-+    if (s->role_value == AXI_ROLE_FRONTEND) {
++    if (s->role_value == AXI_ROLE_SLAVE) {
 +        if (s->notify_ack) {
 +            axi_wait_for_notify_ack(s);
 +        } else {
 +            axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
 +            g_usleep(s->notify_delay_us);
 +        }
-+    } else if (s->role_value == AXI_ROLE_BACKEND &&
++    } else if (s->role_value == AXI_ROLE_MASTER &&
 +               addr == AXI_CONTROL_IRQ_OFFSET) {
 +        axi_control_send(s, value ? AXI_MSG_FRONTEND_IRQ_ASSERT
 +                                  : AXI_MSG_FRONTEND_IRQ_DEASSERT);
@@ -820,7 +819,7 @@ index 0000000000..14521bdf7f
 +static bool axi_parse_mode(AxiState *s, Error **errp)
 +{
 +    const char *mode = s->mode ?: "socket";
-+    const char *role = s->role ?: "frontend";
++    const char *role = s->role ?: "slave";
 +
 +    if (!g_strcmp0(mode, "socket")) {
 +        s->mode_value = AXI_MODE_SOCKET;
@@ -831,10 +830,10 @@ index 0000000000..14521bdf7f
 +        return false;
 +    }
 +
-+    if (!g_strcmp0(role, "frontend")) {
-+        s->role_value = AXI_ROLE_FRONTEND;
-+    } else if (!g_strcmp0(role, "backend")) {
-+        s->role_value = AXI_ROLE_BACKEND;
++    if (!g_strcmp0(role, "slave")) {
++        s->role_value = AXI_ROLE_SLAVE;
++    } else if (!g_strcmp0(role, "master")) {
++        s->role_value = AXI_ROLE_MASTER;
 +    } else {
 +        error_setg(errp, "invalid axi role '%s'", role);
 +        return false;
@@ -895,7 +894,7 @@ index 0000000000..14521bdf7f
 +    MachineState *ms = MACHINE(vms);
 +    g_autofree char *nodename = NULL;
 +
-+    if (!s->virtio_node || !ms->fdt) {
++    if (s->role_value != AXI_ROLE_SLAVE || !ms->fdt) {
 +        return;
 +    }
 +
@@ -915,8 +914,8 @@ index 0000000000..14521bdf7f
 +    MachineState *ms = MACHINE(vms);
 +    g_autofree char *nodename = NULL;
 +
-+    if (s->virtio_node || s->mode_value != AXI_MODE_UIO ||
-+        s->role_value != AXI_ROLE_BACKEND || !ms->fdt) {
++    if (s->mode_value != AXI_MODE_UIO || s->role_value != AXI_ROLE_MASTER ||
++        !ms->fdt) {
 +        return;
 +    }
 +
@@ -1024,7 +1023,7 @@ index 0000000000..14521bdf7f
 +        s->shared_mmio = memory_region_get_ram_ptr(host_mr);
 +        memory_region_init_io(&s->mmio, OBJECT(dev), &axi_uio_ops, s,
 +                              TYPE_AXI, s->size);
-+        if (s->role_value == AXI_ROLE_FRONTEND) {
++        if (s->role_value == AXI_ROLE_SLAVE) {
 +            if (!axi_control_listen(s, errp)) {
 +                return;
 +            }
@@ -1075,7 +1074,6 @@ index 0000000000..14521bdf7f
 +                     HostMemoryBackend *),
 +    DEFINE_PROP_LINK("dma-memdev", AxiState, dma_memdev, TYPE_MEMORY_BACKEND,
 +                     HostMemoryBackend *),
-+    DEFINE_PROP_BOOL("virtio-node", AxiState, virtio_node, true),
 +    DEFINE_PROP_BOOL("notify-ack", AxiState, notify_ack, true),
 +};
 +
@@ -1100,7 +1098,6 @@ index 0000000000..14521bdf7f
 +{
 +    type_register_static(&axi_info);
 +}
-+
 +type_init(axi_register_types);
 diff --git a/hw/misc/meson.build b/hw/misc/meson.build
 index 86596ef8bc..9f2bd7bb47 100644
@@ -1209,7 +1206,6 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +            uint64_t dma_size;
 +            uint64_t size;
 +            uint32_t irq;
-+            bool virtio_node;
 +            g_autofree char *role = NULL;
 +            g_autofree char *mode = NULL;
 +
@@ -1229,19 +1225,20 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +            if (err) {
 +                continue;
 +            }
-+            virtio_node = object_property_get_bool(obj, "virtio-node", &err);
-+            if (!err && virtio_node) {
++            mode = object_property_get_str(obj, "mode", &err);
++            if (err) {
++                err = NULL;
++            }
++            role = object_property_get_str(obj, "role", &err);
++            if (err) {
++                err = NULL;
++            }
++            if (g_strcmp0(mode ?: "socket", "uio") ||
++                !g_strcmp0(role ?: "slave", "slave")) {
 +                axi_acpi_dsdt_add(scope, base, size, irq, irq);
 +                continue;
 +            }
-+            err = NULL;
-+            mode = object_property_get_str(obj, "mode", &err);
-+            if (err || g_strcmp0(mode, "uio")) {
-+                continue;
-+            }
-+            err = NULL;
-+            role = object_property_get_str(obj, "role", &err);
-+            if (err || g_strcmp0(role, "backend")) {
++            if (err || g_strcmp0(role, "master")) {
 +                continue;
 +            }
 +            err = NULL;
@@ -1261,4 +1258,3 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
  }
  
  static void acpi_dsdt_add_xhci(Aml *scope, MicrovmMachineState *mms)
-

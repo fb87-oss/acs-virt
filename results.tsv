@@ -11,3 +11,11 @@ b528018	32.5	77.4	keep	test x64 notify delay at 15000us
 d5a5882	0.0	0.0	crash	test x64 notify delay at 11000us
 5331d61	0.0	0.0	crash	test x64 notify delay at 12000us
 31b38f0	45.7	79.3	keep	test x64 notify delay at 13000us
+socket0	591.6	808.6	keep	qemu-socket fabric reference measurement
+uio-p0	32.1	78.0	discard	disable default backend profiling noisy after qemu rebuild
+uio-a0	38.7	77.5	discard	disable notify ack at 15000us noisy after qemu rebuild
+uio-c0	37.0	77.7	discard	disable console during x64 benchmark
+uio-q0	32.1	57.1	discard	skip sleep for UIO queue notify in QEMU
+uio-r0	33.6	56.6	discard	recheck current uio after qemu rebuild
+uio-nr0	0.0	0.0	crash	skip frontend read notify in QEMU
+uio-rs0	0.0	0.0	crash	skip frontend read notify after DRIVER_OK

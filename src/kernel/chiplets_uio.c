@@ -1,5 +1,7 @@
 #include <linux/acpi.h>
 #include <linux/interrupt.h>
+#include <linux/io.h>
+#include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -50,6 +52,33 @@ static int chiplets_uio_irqcontrol(struct uio_info *info, s32 irq_on)
     return 0;
 }
 
+static int chiplets_uio_mmap(struct uio_info *info, struct vm_area_struct *vma)
+{
+    unsigned long map_index = vma->vm_pgoff;
+    unsigned long requested = vma->vm_end - vma->vm_start;
+    struct uio_mem *mem;
+    unsigned long pfn;
+
+    if (map_index >= MAX_UIO_MAPS) {
+        return -EINVAL;
+    }
+
+    mem = &info->mem[map_index];
+    if (!mem->size || requested > mem->size) {
+        return -EINVAL;
+    }
+
+    pfn = mem->addr >> PAGE_SHIFT;
+    vm_flags_set(vma, VM_IO | VM_DONTEXPAND | VM_DONTDUMP);
+
+    if (map_index == 0) {
+        vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+    }
+
+    return remap_pfn_range(vma, vma->vm_start, pfn, requested,
+                           vma->vm_page_prot);
+}
+
 static unsigned chiplets_uio_index(struct platform_device *pdev)
 {
     struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -92,6 +121,7 @@ static int chiplets_uio_probe(struct platform_device *pdev)
     dev->info.irq_flags = 0;
     dev->info.handler = chiplets_uio_irq;
     dev->info.irqcontrol = chiplets_uio_irqcontrol;
+    dev->info.mmap = chiplets_uio_mmap;
     dev->info.priv = dev;
 
     mmio_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);

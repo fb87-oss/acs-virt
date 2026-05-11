@@ -145,6 +145,16 @@ def extract_backend_profile(log_text: str) -> str:
     )
 
 
+def extract_memory_benchmarks(log_text: str) -> list[str]:
+    results = []
+
+    for line in log_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("UIO_MEMBENCH "):
+            results.append(stripped)
+    return results
+
+
 def truncate(path: Path, size: int) -> None:
     with path.open("wb") as f:
         f.truncate(size)
@@ -188,7 +198,7 @@ def memory_object_args(name: str, path: Path, size: int) -> list[str]:
 
 
 def axi_device_arg(name: str, base: int, irq: int, memdev: str, control: Path,
-                   role: str, virtio_node: bool, dma_base: int,
+                   role: str, dma_base: int,
                    notify_delay_us: int | None = None,
                    notify_ack: bool | None = None,
                    dma_memdev: str | None = None) -> str:
@@ -202,7 +212,6 @@ def axi_device_arg(name: str, base: int, irq: int, memdev: str, control: Path,
         f"irq={irq}",
         f"memdev={memdev}",
         f"control-socket={control}",
-        f"virtio-node={'on' if virtio_node else 'off'}",
     ]
     if notify_delay_us is not None:
         parts.append(f"notify-delay-us={notify_delay_us}")
@@ -365,7 +374,7 @@ def main() -> int:
         "-device",
         axi_device_arg("blk0", int(frontend_config["frontend_blk_base"]),
                        int(frontend_config["blk_irq"]),
-                       "blkmmio", blk_control, "frontend", True,
+                       "blkmmio", blk_control, "slave",
                        backend_frontend_ram_base,
                        notify_delay_us, notify_ack),
     ])
@@ -374,7 +383,7 @@ def main() -> int:
             "-device",
             axi_device_arg("con0", int(frontend_config["frontend_con_base"]),
                            int(frontend_config["con_irq"]),
-                           "conmmio", con_control, "frontend", True,
+                           "conmmio", con_control, "slave",
                            backend_frontend_ram_base,
                            notify_delay_us, notify_ack),
         ])
@@ -394,7 +403,7 @@ def main() -> int:
         "-device",
         axi_device_arg("blk0", int(backend_config["backend_blk_base"]),
                        int(backend_config["blk_irq"]),
-                       "blkmmio", blk_control, "backend", False,
+                       "blkmmio", blk_control, "master",
                        backend_frontend_ram_base, None, None,
                        "frontendram"),
     ])
@@ -403,7 +412,7 @@ def main() -> int:
             "-device",
             axi_device_arg("con0", int(backend_config["backend_con_base"]),
                            int(backend_config["con_irq"]),
-                           "conmmio", con_control, "backend", False,
+                           "conmmio", con_control, "master",
                            backend_frontend_ram_base, None, None,
                            "frontendram"),
         ])
@@ -426,6 +435,9 @@ def main() -> int:
         uio_con_endpoint = f"uio:/dev/uio1:0x200:0x{int(frontend_config['frontend_ram_base']):x}"
         if args.mode == "benchmark":
             backend_disk_setup = f"""
+if [ -x /bin/uio-membench ]; then
+  /bin/uio-membench /dev/uio0 {bench_bytes} {args.bench_repeat}
+fi
 echo BACKEND_NATIVE_CONFIG size_mb={args.bench_size_mb} bs={args.bench_bs} count={bench_count} repeat={args.bench_repeat}
 for run in $(seq 1 {args.bench_repeat}); do
   echo BACKEND_NATIVE_WRITE_START run=$run
@@ -541,6 +553,8 @@ echo UIO_SMOKE_TEST_DONE
                 print(f"  backend native write[{index}]: {result}")
             for index, result in enumerate(backend_read_results, 1):
                 print(f"  backend native read[{index}]:  {result}")
+            for result in extract_memory_benchmarks(backend_text):
+                print(f"  raw frontend RAM: {result}")
             for index, result in enumerate(write_results, 1):
                 print(f"  write[{index}]: {result}")
             for index, result in enumerate(read_results, 1):

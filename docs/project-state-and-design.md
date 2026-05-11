@@ -210,8 +210,8 @@ axi-linux-uio topology
 |  |                            | QEMU-to-QEMU control   |                     | |
 |  | -device axi                | only:                  | -device axi         | |
 |  | mode=uio                   | - frontend notify      | mode=uio            | |
-|  | role=frontend              | - IRQ assert/deassert  | role=backend        | |
-|  | virtio-node=on             | - optional notify ack  | virtio-node=off     | |
+|  | role=slave                 | - IRQ assert/deassert  | role=master         | |
+|  | exposes virtio-mmio        | - optional notify ack  | exposes UIO device  | |
 |  |                            |                        | exposes UIO device  | |
 |  +-------------+--------------+                        +---+-----------------+ |
 |                ^                                           ^                   |
@@ -359,14 +359,13 @@ Key QEMU properties:
 - `size`: MMIO aperture size
 - `irq`: frontend or backend interrupt number
 - `mode`: `socket` or `uio`
-- `role`: `frontend` or `backend` in UIO mode
+- `role`: `slave` or `master` in UIO mode
 - `socket`: backend Unix socket path for socket mode
 - `control-socket`: frontend/backend QEMU control socket in UIO mode
 - `memdev`: host-backed MMIO memory backend in UIO mode
 - `dma-memdev`: frontend RAM memory backend visible to backend QEMU in UIO mode
 - `dma-base`: backend guest address for the mapped frontend RAM aperture
 - `dma-size`: frontend RAM mapping size
-- `virtio-node`: whether to expose a frontend `virtio,mmio` discovery node
 - `notify-delay-us`: delay before frontend notify forwarding
 - `notify-ack`: whether frontend notification waits for backend ack
 
