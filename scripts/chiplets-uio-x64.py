@@ -17,6 +17,8 @@ from pathlib import Path
 MEMORY_SIZE = 512 * 1024 * 1024
 MEMORY_ARG = "512M"
 MMIO_SIZE = 0x1000
+BACKEND_ADDR_OFFSET = 0x0010_0000_0000
+FRONTEND_ADDR_OFFSET = 0x0020_0000_0000
 ARCH_CONFIGS = {
     "x64": {
         "description": "x86_64",
@@ -24,11 +26,10 @@ ARCH_CONFIGS = {
         "machine": "microvm,pcie=off,ioapic2=on,virtio-mmio-transports=0,memory-backend=guestmem",
         "append": "console=ttyS0 root=/dev/ram0 rdinit=/linuxrc loglevel=8",
         "cpu_args": [],
-        "frontend_blk_base": 0x0010_FEB0_0000,
-        "frontend_con_base": 0x0010_FEB0_1000,
-        "backend_blk_base": 0x0000_FEB0_0000,
-        "backend_con_base": 0x0000_FEB0_1000,
-        "backend_dma_base": 0x3000_0000,
+        "frontend_blk_base": FRONTEND_ADDR_OFFSET + 0xFEB0_0000,
+        "frontend_con_base": FRONTEND_ADDR_OFFSET + 0xFEB0_1000,
+        "backend_blk_base": BACKEND_ADDR_OFFSET + 0xFEB0_0000,
+        "backend_con_base": BACKEND_ADDR_OFFSET + 0xFEB0_1000,
         "frontend_ram_base": 0x0,
         "blk_irq": 16,
         "con_irq": 17,
@@ -39,11 +40,10 @@ ARCH_CONFIGS = {
         "machine": "virt,highmem-mmio=on,highmem-mmio-size=1T,gic-version=3,acpi=off,memory-backend=guestmem",
         "append": "console=ttyAMA0 root=/dev/ram0 rdinit=/linuxrc loglevel=8",
         "cpu_args": ["-cpu", "max"],
-        "frontend_blk_base": 0x0010_FEB0_0000,
-        "frontend_con_base": 0x0010_FEB0_1000,
-        "backend_blk_base": 0x0000_FEB0_0000,
-        "backend_con_base": 0x0000_FEB0_1000,
-        "backend_dma_base": 0x3000_0000,
+        "frontend_blk_base": FRONTEND_ADDR_OFFSET + 0xFEB0_0000,
+        "frontend_con_base": FRONTEND_ADDR_OFFSET + 0xFEB0_1000,
+        "backend_blk_base": BACKEND_ADDR_OFFSET + 0xFEB0_0000,
+        "backend_con_base": BACKEND_ADDR_OFFSET + 0xFEB0_1000,
         "frontend_ram_base": 0x4000_0000,
         "blk_irq": 48,
         "con_irq": 49,
@@ -328,6 +328,9 @@ def main() -> int:
     blkd_prefix = " ".join(blkd_env)
     if blkd_prefix:
         blkd_prefix += " "
+    backend_frontend_ram_base = (
+        BACKEND_ADDR_OFFSET + int(frontend_config["frontend_ram_base"])
+    )
 
     frontend_ram = run_dir / "frontend.ram"
     backend_ram = run_dir / "backend.ram"
@@ -363,7 +366,7 @@ def main() -> int:
         axi_device_arg("blk0", int(frontend_config["frontend_blk_base"]),
                        int(frontend_config["blk_irq"]),
                        "blkmmio", blk_control, "frontend", True,
-                       int(backend_config["backend_dma_base"]),
+                       backend_frontend_ram_base,
                        notify_delay_us, notify_ack),
     ])
     if include_console:
@@ -372,7 +375,7 @@ def main() -> int:
             axi_device_arg("con0", int(frontend_config["frontend_con_base"]),
                            int(frontend_config["con_irq"]),
                            "conmmio", con_control, "frontend", True,
-                           int(backend_config["backend_dma_base"]),
+                           backend_frontend_ram_base,
                            notify_delay_us, notify_ack),
         ])
 
@@ -392,7 +395,7 @@ def main() -> int:
         axi_device_arg("blk0", int(backend_config["backend_blk_base"]),
                        int(backend_config["blk_irq"]),
                        "blkmmio", blk_control, "backend", False,
-                       int(backend_config["backend_dma_base"]), None, None,
+                       backend_frontend_ram_base, None, None,
                        "frontendram"),
     ])
     if include_console:
@@ -401,7 +404,7 @@ def main() -> int:
             axi_device_arg("con0", int(backend_config["backend_con_base"]),
                            int(backend_config["con_irq"]),
                            "conmmio", con_control, "backend", False,
-                           int(backend_config["backend_dma_base"]), None, None,
+                           backend_frontend_ram_base, None, None,
                            "frontendram"),
         ])
 

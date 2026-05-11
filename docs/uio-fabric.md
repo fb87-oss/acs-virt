@@ -22,13 +22,17 @@ starts the same two-VM topology with ARM64 `virt` machines under TCG:
 
 The current x64 smoke topology is:
 
-- Block frontend MMIO: `0x10feb00000`
-- Console frontend MMIO: `0x10feb01000`
-- Block backend UIO MMIO: `0xfeb00000`
-- Console backend UIO MMIO: `0xfeb01000`
-- Backend DMA aperture: `0x30000000`, size `512MiB`
+- Block frontend MMIO: `0x20feb00000`
+- Console frontend MMIO: `0x20feb01000`
+- Block backend UIO MMIO: `0x10feb00000`
+- Console backend UIO MMIO: `0x10feb01000`
+- Backend frontend-RAM aperture: `0x001000000000 + frontend_gpa`, size `512MiB`
 - Device windows: `0x1000` bytes
 - IRQs: block `16`, console `17`
+
+For x86_64 frontends, frontend RAM starts at GPA `0x0`, so the backend maps the
+shared RAM aperture at `0x001000000000`. For ARM64 frontends, frontend RAM starts
+at GPA `0x40000000`, so the backend maps it at `0x001040000000`.
 
 The current ARM64 smoke topology uses the same MMIO and DMA layout with GIC SPI
 IRQs block `48` and console `49`. QEMU exports frontend `virtio,mmio` FDT nodes

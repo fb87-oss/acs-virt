@@ -17,9 +17,9 @@ Resources exposed per device:
 Default fallback layout:
 
 ```text
-MMIO base: 0xfeb00000
+MMIO base: 0x0010_feb0_0000
 MMIO size: 0x1000 per device
-DMA base:  0x30000000
+DMA base:  0x0010_0000_0000
 DMA size:  0x20000000
 IRQ base:  16
 ```

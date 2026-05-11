@@ -47,7 +47,7 @@ ram-access=<shared-mem|qemu-mediated>
 target=<backend target name>
 memdev=<MMIO memory-backend object>
 dma-memdev=<frontend RAM memory-backend object>
-dma-base=<frontend RAM base visible to the backend>
+dma-base=<backend guest physical base for the frontend RAM aperture>
 dma-size=<frontend RAM size>
 virtio-node=<on|off>
 notify-delay-us=<frontend notify delay>
@@ -64,12 +64,12 @@ The TOML launcher emits socket-mode devices like:
 The UIO orchestrator emits paired devices like:
 
 ```text
--device axi,id=blk0,mode=uio,role=frontend,base=0x10feb00000,size=0x1000,
+-device axi,id=blk0,mode=uio,role=frontend,base=0x20feb00000,size=0x1000,
   irq=16,memdev=blkmmio,control-socket=/tmp/.../blk.control.sock,
   virtio-node=on,notify-delay-us=50000,notify-ack=on
--device axi,id=blk0,mode=uio,role=backend,base=0xfeb00000,size=0x1000,
+-device axi,id=blk0,mode=uio,role=backend,base=0x10feb00000,size=0x1000,
   irq=16,memdev=blkmmio,control-socket=/tmp/.../blk.control.sock,
-  virtio-node=off,dma-memdev=frontendram,dma-base=0x30000000,
+  virtio-node=off,dma-memdev=frontendram,dma-base=0x1000000000,
   dma-size=536870912
 ```
 

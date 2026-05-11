@@ -189,8 +189,8 @@ axi-linux-uio topology
 | - upstream virtio_console       |          | - /dev/uio0 for blk0             |
 |                                 |          | - /dev/uio1 for con0             |
 | Guest-visible MMIO windows:     |          |                                  |
-| - blk0: 0x10feb00000 size 0x1000|          | UIO maps per device:             |
-| - con0: 0x10feb01000 size 0x1000|          | - map0: MMIO/control window      |
+| - blk0: 0x20feb00000 size 0x1000|          | UIO maps per device:             |
+| - con0: 0x20feb01000 size 0x1000|          | - map0: MMIO/control window      |
 |                                 |          | - map1: frontend RAM DMA aperture|
 | Frontend RAM GPA base:          |          | - irq: frontend notify           |
 | - x86_64: 0x0                   |          |                                  |
@@ -242,8 +242,8 @@ MMIO shared-file mapping in `axi-linux-uio`:
 ```text
 Frontend VM view                    Shared file      Backend VM UIO view
 ----------------                    -----------      --------------------
-blk0 0x10feb00000..0x10feb00fff <-> blk.mmio   <->  /dev/uio0 map0
-con0 0x10feb01000..0x10feb01fff <-> con.mmio   <->  /dev/uio1 map0
+blk0 0x20feb00000..0x20feb00fff <-> blk.mmio   <->  /dev/uio0 map0
+con0 0x20feb01000..0x20feb01fff <-> con.mmio   <->  /dev/uio1 map0
 
 Each device window is 0x1000 bytes.
 
@@ -279,9 +279,15 @@ Endpoint examples:
     uio:/dev/uio0:0x200:0x40000000
     dma_base = 0x40000000
 
-Backend DMA aperture visible in the backend guest:
+Backend frontend-RAM aperture visible in the backend guest:
 
-  0x30000000..0x4fffffff  maps frontend.ram through UIO map1
+  backend_phys = 0x0010_0000_0000 + frontend_gpa
+
+  x86_64 frontend:
+    0x0010_0000_0000..0x0010_1fff_ffff  maps frontend.ram
+
+  ARM64 frontend:
+    0x0010_4000_0000..0x0010_5fff_ffff  maps frontend.ram
 ```
 
 What travels over the Unix control socket in `axi-linux-uio`:
@@ -499,9 +505,9 @@ driver packaged into the temporary initrd by the flake wrapper.
 Fallback layout:
 
 ```text
-MMIO base: 0xfeb00000
+MMIO base: 0x0010_feb0_0000
 MMIO size: 0x1000 per device
-DMA base:  0x30000000
+DMA base:  0x0010_0000_0000
 DMA size:  0x20000000
 IRQ base:  16
 ```
@@ -523,11 +529,11 @@ ARM64 frontend discovery uses `virtio,mmio` FDT nodes. Backend UIO discovery use
 Common UIO topology:
 
 ```text
-frontend blk MMIO: 0x0010_feb0_0000
-frontend con MMIO: 0x0010_feb0_1000
-backend blk MMIO:  0x0000_feb0_0000
-backend con MMIO:  0x0000_feb0_1000
-backend DMA base:  0x3000_0000
+frontend blk MMIO: 0x0020_feb0_0000
+frontend con MMIO: 0x0020_feb0_1000
+backend blk MMIO:  0x0010_feb0_0000
+backend con MMIO:  0x0010_feb0_1000
+backend RAM aperture base: 0x0010_0000_0000 + frontend RAM GPA base
 MMIO window size:  0x1000
 IRQ control word:  offset 0x200 in backend UIO map0
 ```
