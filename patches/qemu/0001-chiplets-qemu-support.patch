@@ -1,3 +1,111 @@
+diff --git a/configs/devices/x86_64-softmmu/microvm-minimal.mak b/configs/devices/x86_64-softmmu/microvm-minimal.mak
+new file mode 100644
+index 0000000000..80a5d87093
+--- /dev/null
++++ b/configs/devices/x86_64-softmmu/microvm-minimal.mak
+@@ -0,0 +1,3 @@
++# Minimal x86_64 system device set: microvm machine only.
++CONFIG_MICROVM=y
++CONFIG_AXI=y
+
+diff --git a/hw/i386/microvm.c b/hw/i386/microvm.c
+index bd657a9388..f442cd02d7 100644
+--- a/hw/i386/microvm.c
++++ b/hw/i386/microvm.c
+@@ -188,14 +188,13 @@ static void microvm_devices_init(MicrovmMachineState *mms)
+ 
+     mms->virtio_irq_base = 5;
+-    mms->virtio_num_transports = 8;
+     if (x86ms->ioapic2) {
+         mms->pcie_irq_base = 16;    /* 16 -> 19 */
+-        /* use second ioapic (24 -> 47) for virtio-mmio irq lines */
+-        mms->virtio_irq_base = IO_APIC_SECONDARY_IRQBASE;
+-        mms->virtio_num_transports = IOAPIC_NUM_PINS;
++        /* reserve primary IO-APIC GSIs 16 -> 23 for project axi devices */
++        mms->virtio_irq_base = MICROVM_AXI_IRQ_BASE +
++                               MICROVM_AXI_IRQ_COUNT;
+     } else if (x86_machine_is_acpi_enabled(x86ms)) {
+         mms->pcie_irq_base = 12;    /* 12 -> 15 */
+         mms->virtio_irq_base = 16;  /* 16 -> 23 */
+     }
+ 
+     for (i = 0; i < mms->virtio_num_transports; i++) {
+@@ -603,6 +604,24 @@ static bool microvm_machine_get_auto_kernel_cmdline(Object *obj, Error **errp)
+     return mms->auto_kernel_cmdline;
+ }
+ 
++static void microvm_machine_get_virtio_mmio_transports(Object *obj, Visitor *v,
++                                                       const char *name,
++                                                       void *opaque,
++                                                       Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++    visit_type_uint32(v, name, &mms->virtio_num_transports, errp);
++}
++
++static void microvm_machine_set_virtio_mmio_transports(Object *obj, Visitor *v,
++                                                       const char *name,
++                                                       void *opaque,
++                                                       Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++    visit_type_uint32(v, name, &mms->virtio_num_transports, errp);
++}
++
+ static void microvm_machine_set_auto_kernel_cmdline(Object *obj, bool value,
+                                                     Error **errp)
+ {
+@@ -625,6 +644,7 @@ static void microvm_machine_initfn(Object *obj)
+     mms->ioapic2 = ON_OFF_AUTO_AUTO;
+     mms->isa_serial = true;
+     mms->option_roms = true;
++    mms->virtio_num_transports = 0;
+     mms->auto_kernel_cmdline = true;
+ }
+ 
+@@ -713,8 +733,18 @@ static void microvm_class_init(ObjectClass *oc, const void *data)
+                                    microvm_machine_get_auto_kernel_cmdline,
+                                    microvm_machine_set_auto_kernel_cmdline);
+     object_class_property_set_description(oc,
+         MICROVM_MACHINE_AUTO_KERNEL_CMDLINE,
+         "Set off to disable adding virtio-mmio devices to the kernel cmdline");
++
++    object_class_property_add(oc, MICROVM_MACHINE_VIRTIO_MMIO_TRANSPORTS,
++                              "uint32",
++                              microvm_machine_get_virtio_mmio_transports,
++                              microvm_machine_set_virtio_mmio_transports,
++                              NULL, NULL);
++    object_class_property_set_description(oc,
++        MICROVM_MACHINE_VIRTIO_MMIO_TRANSPORTS,
++        "Number of built-in virtio-mmio transports");
+ 
+     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
++    machine_class_allow_dynamic_sysbus_dev(mc, "axi");
+ 
+diff --git a/include/hw/i386/microvm.h b/include/hw/i386/microvm.h
+index 2ad87ef551..b194649b4d 100644
+--- a/include/hw/i386/microvm.h
++++ b/include/hw/i386/microvm.h
+@@ -61,6 +61,10 @@
+ #define MICROVM_XHCI_BASE     0xfe900000
+ #define MICROVM_XHCI_IRQ      10
+ 
++/* Project-reserved primary IO-APIC range for externally-backed axi MMIO. */
++#define MICROVM_AXI_IRQ_BASE  16
++#define MICROVM_AXI_IRQ_COUNT 8
++
+ #define PCIE_MMIO_BASE        0xc0000000
+ #define PCIE_MMIO_SIZE        0x20000000
+ #define PCIE_ECAM_BASE        0xe0000000
+@@ -73,6 +77,7 @@
+ #define MICROVM_MACHINE_ISA_SERIAL          "isa-serial"
+ #define MICROVM_MACHINE_OPTION_ROMS         "x-option-roms"
+ #define MICROVM_MACHINE_AUTO_KERNEL_CMDLINE "auto-kernel-cmdline"
++#define MICROVM_MACHINE_VIRTIO_MMIO_TRANSPORTS "virtio-mmio-transports"
+ 
+ struct MicrovmMachineClass {
+     X86MachineClass parent;
+
 diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
 index 80c8a6a58d..f83ef340cc 100644
 --- a/hw/misc/Kconfig
@@ -1003,3 +1111,154 @@ index 86596ef8bc..9f2bd7bb47 100644
  system_ss.add(when: 'CONFIG_APPLESMC', if_true: files('applesmc.c'))
  system_ss.add(when: 'CONFIG_EDU', if_true: files('edu.c'))
  system_ss.add(when: 'CONFIG_FW_CFG_DMA', if_true: files('vmcoreinfo.c'))
+
+diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
+--- a/hw/i386/acpi-microvm.c
++++ b/hw/i386/acpi-microvm.c
+@@ -46,5 +46,70 @@
+ 
+ #include CONFIG_DEVICES
+ 
++static void axi_acpi_append_memory(Aml *crs, hwaddr base, hwaddr size)
++{
++    if (base <= UINT32_MAX && size <= UINT32_MAX) {
++        aml_append(crs, aml_memory32_fixed(base, size, AML_READ_WRITE));
++    } else {
++        aml_append(crs,
++                   aml_qword_memory(AML_POS_DECODE, AML_MIN_FIXED,
++                                    AML_MAX_FIXED, AML_NON_CACHEABLE,
++                                    AML_READ_WRITE, 0, base, base + size - 1,
++                                    0, size));
++    }
++}
++
++static void axi_acpi_dsdt_add(Aml *scope, hwaddr base, hwaddr size,
++                                  uint32_t irq, unsigned int index)
++{
++    Aml *dev = aml_device("VR%02u", index);
++    Aml *crs;
++
++    aml_append(dev, aml_name_decl("_HID", aml_string("LNRO0005")));
++    aml_append(dev, aml_name_decl("_UID", aml_int(index)));
++    aml_append(dev, aml_name_decl("_CCA", aml_int(1)));
++
++    crs = aml_resource_template();
++    axi_acpi_append_memory(crs, base, size);
++    aml_append(crs,
++               aml_interrupt(AML_CONSUMER, AML_EDGE, AML_ACTIVE_HIGH,
++                             AML_EXCLUSIVE, &irq, 1));
++    aml_append(dev, aml_name_decl("_CRS", crs));
++    aml_append(scope, dev);
++}
++
++static void axi_acpi_uio_dsdt_add(Aml *scope, hwaddr base, hwaddr size,
++                                  hwaddr dma_base, hwaddr dma_size,
++                                  uint32_t irq, unsigned int index)
++{
++    Aml *dev = aml_device("AU%02u", index);
++    Aml *crs;
++    Aml *uuid = aml_touuid("DAFFD814-6EBA-4D8C-8A91-BC9BBF4AA301");
++    Aml *compatible = aml_package(2);
++    Aml *props = aml_package(1);
++    Aml *dsd = aml_package(2);
++
++    aml_append(dev, aml_name_decl("_HID", aml_string("PRP0001")));
++    aml_append(dev, aml_name_decl("_UID", aml_int(index)));
++    aml_append(dev, aml_name_decl("_CCA", aml_int(1)));
++
++    crs = aml_resource_template();
++    axi_acpi_append_memory(crs, base, size);
++    if (dma_size) {
++        axi_acpi_append_memory(crs, dma_base, dma_size);
++    }
++    aml_append(crs,
++               aml_interrupt(AML_CONSUMER, AML_EDGE, AML_ACTIVE_HIGH,
++                             AML_EXCLUSIVE, &irq, 1));
++    aml_append(dev, aml_name_decl("_CRS", crs));
++
++    aml_append(compatible, aml_string("compatible"));
++    aml_append(compatible, aml_string("generic-uio"));
++    aml_append(props, compatible);
++    aml_append(dsd, uuid);
++    aml_append(dsd, props);
++    aml_append(dev, aml_name_decl("_DSD", dsd));
++    aml_append(scope, dev);
++}
+ static void acpi_dsdt_add_virtio(Aml *scope,
+                                  MicrovmMachineState *mms)
+@@ -51,6 +116,7 @@ static void acpi_dsdt_add_virtio(Aml *scope,
+ {
+     gchar *separator;
+     long int index;
++    unsigned int axi_irq;
+     BusState *bus;
+     BusChild *kid;
+ 
+@@ -81,6 +147,66 @@ static void acpi_dsdt_add_virtio(Aml *scope,
+             virtio_acpi_dsdt_add(scope, base, size, irq, index, 1);
+         }
+     }
++    for (axi_irq = MICROVM_AXI_IRQ_BASE;
++         axi_irq < MICROVM_AXI_IRQ_BASE + MICROVM_AXI_IRQ_COUNT;
++         axi_irq++) {
++        QTAILQ_FOREACH(kid, &bus->children, sibling) {
++            Object *obj = object_dynamic_cast(OBJECT(kid->child), "axi");
++            g_autoptr(Error) err = NULL;
++            uint64_t base;
++            uint64_t dma_base;
++            uint64_t dma_size;
++            uint64_t size;
++            uint32_t irq;
++            bool virtio_node;
++            g_autofree char *role = NULL;
++            g_autofree char *mode = NULL;
++
++            if (!obj) {
++                continue;
++            }
++
++            irq = object_property_get_uint(obj, "irq", &err);
++            if (err || irq != axi_irq) {
++                continue;
++            }
++            base = object_property_get_uint(obj, "base", &err);
++            if (err) {
++                continue;
++            }
++            size = object_property_get_uint(obj, "size", &err);
++            if (err) {
++                continue;
++            }
++            virtio_node = object_property_get_bool(obj, "virtio-node", &err);
++            if (!err && virtio_node) {
++                axi_acpi_dsdt_add(scope, base, size, irq, irq);
++                continue;
++            }
++            err = NULL;
++            mode = object_property_get_str(obj, "mode", &err);
++            if (err || g_strcmp0(mode, "uio")) {
++                continue;
++            }
++            err = NULL;
++            role = object_property_get_str(obj, "role", &err);
++            if (err || g_strcmp0(role, "backend")) {
++                continue;
++            }
++            err = NULL;
++            dma_base = object_property_get_uint(obj, "dma-base", &err);
++            if (err) {
++                dma_base = 0;
++            }
++            err = NULL;
++            dma_size = object_property_get_uint(obj, "dma-size", &err);
++            if (err) {
++                dma_size = 0;
++            }
++            axi_acpi_uio_dsdt_add(scope, base, size, dma_base, dma_size,
++                                  irq, irq);
++        }
++    }
+ }
+ 
+ static void acpi_dsdt_add_xhci(Aml *scope, MicrovmMachineState *mms)
+

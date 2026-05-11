@@ -134,10 +134,7 @@ scripts/build-qemu-x64.sh
 Patch docs live beside the patches:
 
 ```text
-patches/qemu/0001-add-x86-64-microvm-minimal-device-config.patch.md
-patches/qemu/0002-add-microvm-virtio-mmio-transport-count.patch.md
-patches/qemu/0003-add-axi-device.patch.md
-patches/qemu/0004-export-axi-irqs-with-microvm-acpi.patch.md
+patches/qemu/0001-chiplets-qemu-support.patch.md
 ```
 
 ## Build C Tools

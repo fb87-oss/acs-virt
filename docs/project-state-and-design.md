@@ -339,7 +339,7 @@ inside the backend guest process.
 ## QEMU `axi` Device
 
 The custom QEMU `axi` sysbus device is added by
-`patches/qemu/0003-add-axi-device.patch`.
+`patches/qemu/0001-chiplets-qemu-support.patch`.
 
 Despite the name, this is not a complete hardware AXI controller. It is a small
 transport/proxy device used to expose a configurable MMIO window and interrupt to
@@ -592,16 +592,11 @@ fragile ARM64-backend/x86_64-frontend topology.
 
 ## QEMU Patch Set
 
-Current QEMU patches:
+Current QEMU patch:
 
-- `0001-add-x86-64-microvm-minimal-device-config.patch`: adds a minimal x86_64
-  device config.
-- `0002-add-microvm-virtio-mmio-transport-count.patch`: lets microvm disable
-  built-in virtio-mmio transports and reserves IRQs for `axi`.
-- `0003-add-axi-device.patch`: adds the custom `axi` sysbus device for the
-  `axi-socket` and `axi-linux-uio` topologies.
-- `0004-export-axi-irqs-with-microvm-acpi.patch`: exports frontend `axi` windows
-  through microvm ACPI using Linux's virtio-mmio HID.
+- `0001-chiplets-qemu-support.patch`: adds the custom `axi` sysbus device,
+  minimal device configs, microvm transport/IRQ controls, AArch64 FDT nodes, and
+  microvm ACPI exposure for frontend `axi` windows.
 
 Important decision: QEMU remains a transport proxy. Virtio endpoint semantics
 stay in C backend daemons.
@@ -762,7 +757,7 @@ Recommended reading sequence:
 4. `docs/runtime-config.md`
 5. `src/fabrics/fabric.md`
 6. `src/drivers/virtio-blkd.md`
-7. `patches/qemu/0003-add-axi-device.patch.md`
+7. `patches/qemu/0001-chiplets-qemu-support.patch.md`
 
 After that, read the C files in this order:
 

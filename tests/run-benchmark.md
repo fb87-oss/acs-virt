@@ -67,6 +67,20 @@ and prints the run directory and log paths at the end.
 
 The guest commands are injected through QEMU serial input:
 
+Backend guest setup and native disk baseline:
+
+```sh
+while [ ! -e /dev/uio0 ]; do mdev -s; sleep 1; done
+for run in $(seq 1 <BENCH_REPEAT>); do
+  dd if=/dev/zero of=/blk0.img bs=<BENCH_BS> count=<count>
+  sync
+  dd if=/blk0.img of=/dev/null bs=<BENCH_BS> count=<count>
+done
+dd if=/dev/zero of=/blk0.img bs=1M count=0 seek=<image_size_mb>
+```
+
+Frontend virtio-blk workload:
+
 ```sh
 while [ ! -b /dev/vda ]; do sleep 1; done
 for run in $(seq 1 <BENCH_REPEAT>); do
@@ -76,8 +90,10 @@ for run in $(seq 1 <BENCH_REPEAT>); do
 done
 ```
 
-The benchmark uses `/dev/zero` for writes to measure the backend/frontend block
-path without spending guest CPU time generating random data.
+The benchmark uses `/dev/zero` for writes to avoid spending guest CPU time
+generating random data. Backend-native results measure the backend VM's local
+image I/O path before `virtio-blkd` starts; frontend results measure the full
+virtio/UIO path through `/dev/vda`.
 
 ## Output
 
@@ -89,10 +105,16 @@ uio dd benchmark complete
 
 benchmark summary
   config: size=1MiB bs=64K count=16 repeat=2
+  backend native write[1]: 1048576 bytes (1.0MB) copied, 0.001067 seconds, 937.2MB/s
+  backend native write[2]: 1048576 bytes (1.0MB) copied, 0.001041 seconds, 960.6MB/s
+  backend native read[1]:  1048576 bytes (1.0MB) copied, 0.000817 seconds, 1.2GB/s
+  backend native read[2]:  1048576 bytes (1.0MB) copied, 0.000801 seconds, 1.2GB/s
   write[1]: 1048576 bytes (1.0MB) copied, 0.160013 seconds, 6.2MB/s
   write[2]: 1048576 bytes (1.0MB) copied, 0.158653 seconds, 6.3MB/s
   read[1]:  1048576 bytes (1.0MB) copied, 0.249040 seconds, 4.0MB/s
   read[2]:  1048576 bytes (1.0MB) copied, 0.247073 seconds, 4.0MB/s
+  backend native write summary: min=937.2MiB/s avg=948.9MiB/s max=960.6MiB/s
+  backend native read summary:  min=1248.4MiB/s avg=1260.9MiB/s max=1273.4MiB/s
   write summary: min=6.2MiB/s avg=6.3MiB/s max=6.3MiB/s
   read summary:  min=4.0MiB/s avg=4.0MiB/s max=4.0MiB/s
   backend requests: read=7 write=4 flush=0

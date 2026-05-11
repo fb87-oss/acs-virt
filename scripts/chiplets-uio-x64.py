@@ -316,7 +316,7 @@ def main() -> int:
     run_dir = Path(args.run_dir) if args.run_dir else Path(tempfile.mkdtemp(prefix=prefix, dir=os.environ.get("TMPDIR", "/tmp")))
     run_dir.mkdir(parents=True, exist_ok=True)
     include_console = frontend_arch != "a64" or args.mode != "benchmark"
-    notify_delay_us = 13000 if frontend_arch == "x64" else 25000
+    notify_delay_us = 15000 if frontend_arch == "x64" else 25000
     notify_ack = not (backend_arch == "a64" and frontend_arch == "x64")
     profile_backend = os.environ.get("CHIPLETS_PROFILE_BACKEND") == "1"
     direct_read = os.environ.get("CHIPLETS_DIRECT_READ_DMA") == "1"
@@ -424,10 +424,26 @@ def main() -> int:
         image_size_mb = max(64, args.bench_size_mb)
         uio_blk_endpoint = f"uio:/dev/uio0:0x200:0x{int(frontend_config['frontend_ram_base']):x}"
         uio_con_endpoint = f"uio:/dev/uio1:0x200:0x{int(frontend_config['frontend_ram_base']):x}"
+        if args.mode == "benchmark":
+            backend_disk_setup = f"""
+echo BACKEND_NATIVE_CONFIG size_mb={args.bench_size_mb} bs={args.bench_bs} count={bench_count} repeat={args.bench_repeat}
+for run in $(seq 1 {args.bench_repeat}); do
+  echo BACKEND_NATIVE_WRITE_START run=$run
+  dd if=/dev/zero of=/blk0.img bs={args.bench_bs} count={bench_count} 2>&1
+  sync
+  echo BACKEND_NATIVE_WRITE_END run=$run
+  echo BACKEND_NATIVE_READ_START run=$run
+  dd if=/blk0.img of=/dev/null bs={args.bench_bs} count={bench_count} 2>&1
+  echo BACKEND_NATIVE_READ_END run=$run
+done
+dd if=/dev/zero of=/blk0.img bs=1M count=0 seek={image_size_mb}
+"""
+        else:
+            backend_disk_setup = f"dd if=/dev/zero of=/blk0.img bs=1M count={image_size_mb}"
         if include_console:
             backend_script = f"""
 while [ ! -e /dev/uio0 ] || [ ! -e /dev/uio1 ]; do mdev -s; sleep 1; done
-dd if=/dev/zero of=/blk0.img bs=1M count={image_size_mb}
+{backend_disk_setup}
 {blkd_prefix}/bin/virtio-blkd 'name=blk0,socket={uio_blk_endpoint},image=/blk0.img,readonly=false,ram_access=shared-mem' &
 /bin/virtio-consoled 'name=con0,socket={uio_con_endpoint},output=-,ram_access=shared-mem' &
 echo UIO_BACKEND_READY
@@ -436,7 +452,7 @@ wait
         else:
             backend_script = f"""
 while [ ! -e /dev/uio0 ]; do mdev -s; sleep 1; done
-dd if=/dev/zero of=/blk0.img bs=1M count={image_size_mb}
+{backend_disk_setup}
 {blkd_prefix}/bin/virtio-blkd 'name=blk0,socket={uio_blk_endpoint},image=/blk0.img,readonly=false,ram_access=shared-mem' &
 echo UIO_BACKEND_READY
 wait
@@ -502,17 +518,38 @@ echo UIO_SMOKE_TEST_DONE
             backend_text = backend_log.read_text(errors="replace")
             write_results = extract_dd_results(frontend_text, "WRITE_BENCH_START", "WRITE_BENCH_END")
             read_results = extract_dd_results(frontend_text, "READ_BENCH_START", "READ_BENCH_END")
+            backend_write_results = extract_dd_results(
+                backend_text,
+                "BACKEND_NATIVE_WRITE_START",
+                "BACKEND_NATIVE_WRITE_END",
+            )
+            backend_read_results = extract_dd_results(
+                backend_text,
+                "BACKEND_NATIVE_READ_START",
+                "BACKEND_NATIVE_READ_END",
+            )
             if len(write_results) != args.bench_repeat or len(read_results) != args.bench_repeat:
                 raise RuntimeError("failed to parse dd throughput from frontend log")
+            if (len(backend_write_results) != args.bench_repeat or
+                    len(backend_read_results) != args.bench_repeat):
+                raise RuntimeError("failed to parse native dd throughput from backend log")
             print("uio dd benchmark complete")
             print()
             print("benchmark summary")
             print(f"  config: size={args.bench_size_mb}MiB bs={args.bench_bs} count={bench_count} repeat={args.bench_repeat}")
+            for index, result in enumerate(backend_write_results, 1):
+                print(f"  backend native write[{index}]: {result}")
+            for index, result in enumerate(backend_read_results, 1):
+                print(f"  backend native read[{index}]:  {result}")
             for index, result in enumerate(write_results, 1):
                 print(f"  write[{index}]: {result}")
             for index, result in enumerate(read_results, 1):
                 print(f"  read[{index}]:  {result}")
             if args.bench_repeat > 1:
+                print("  backend native write summary: "
+                      f"{throughput_summary(backend_write_results, bench_bytes)}")
+                print("  backend native read summary:  "
+                      f"{throughput_summary(backend_read_results, bench_bytes)}")
                 print(f"  write summary: {throughput_summary(write_results, bench_bytes)}")
                 print(f"  read summary:  {throughput_summary(read_results, bench_bytes)}")
             print("  backend requests: "

@@ -11,6 +11,26 @@
     pkgs = import nixpkgs { system = "x86_64-linux"; };
     pkgsArm64 = import nixpkgs { system = "aarch64-linux"; };
     pkgsCrossArm64 = pkgs.pkgsCross.aarch64-multiplatform;
+    lib = pkgs.lib;
+
+    x64Kernel = pkgs.linuxPackages_latest.kernel;
+    x64Busybox = pkgs.pkgsStatic.busybox;
+    a64Kernel = pkgsArm64.linuxPackages_latest.kernel;
+    a64Busybox = pkgsArm64.pkgsStatic.busybox;
+    kernelModules = kernel: "lib/modules/${kernel.modDirVersion}/kernel";
+    initrdFor = kernel: busybox: build-initrd kernel busybox (kernelModules kernel);
+    x64Initrd = initrdFor x64Kernel x64Busybox;
+    a64Initrd = initrdFor a64Kernel a64Busybox;
+    x64KernelImage = "${x64Kernel}/bzImage";
+    a64KernelImage = "${a64Kernel}/Image";
+    uioModuleBuildPath = lib.makeBinPath [
+      pkgs.gcc
+      pkgs.gnumake
+      pkgs.binutils
+      pkgs.perl
+      pkgs.bash
+      pkgs.coreutils
+    ];
 
     build-initrc = modules: pkgs.writeScript "make-initrc" ''
       #!/bin/sh
@@ -92,7 +112,7 @@
       set -x
 
       if [ "$#" -lt 1 ]; then
-      echo "usage: runvm [--dry-run] [--no-backend] <samples/*.toml> [-- <qemu-args>...]" >&2
+        echo "usage: runvm [--dry-run] [--no-backend] <samples/*.toml> [-- <qemu-args>...]" >&2
         exit 2
       fi
 
@@ -104,12 +124,12 @@
       [ -f "$kernel_image" ] || kernel_image=${kernel}/bzImage
       exec ${pkgs.python3}/bin/python3 "$PWD/scripts/chiplets-launcher.py" \
         --kernel $kernel_image \
-        --initrd ${build-initrd kernel busybox "lib/modules/${kernel.modDirVersion}/kernel" } \
+        --initrd ${initrdFor kernel busybox} \
         "$@"
     '';
 
-    runvm-x64 = runvm pkgs.linuxPackages_latest.kernel pkgs.pkgsStatic.busybox;
-    runvm-a64 = runvm pkgsArm64.linuxPackages_latest.kernel pkgsArm64.pkgsStatic.busybox;
+    runvm-x64 = runvm x64Kernel x64Busybox;
+    runvm-a64 = runvm a64Kernel a64Busybox;
     runuio-x64 = pkgs.writeShellScriptBin "runuio-x64" ''
       set -euo pipefail
 
@@ -122,7 +142,7 @@
       }
       trap cleanup EXIT
 
-      ${pkgs.gzip}/bin/gzip -dc ${build-initrd pkgs.linuxPackages_latest.kernel pkgs.pkgsStatic.busybox "lib/modules/${pkgs.linuxPackages_latest.kernel.modDirVersion}/kernel" } |
+      ${pkgs.gzip}/bin/gzip -dc ${x64Initrd} |
         (cd "$tmp" && ${pkgs.cpio}/bin/cpio -id --quiet)
       ${pkgs.coreutils}/bin/chmod -R u+w "$tmp"
 
@@ -132,9 +152,9 @@
       cat > "$module_build/Makefile" <<'EOF'
 obj-m += chiplets_uio.o
 EOF
-      PATH=${pkgs.gcc}/bin:${pkgs.gnumake}/bin:${pkgs.binutils}/bin:${pkgs.perl}/bin:${pkgs.bash}/bin:${pkgs.coreutils}/bin:$PATH \
-        ${pkgs.gnumake}/bin/make -s -C ${pkgs.linuxPackages_latest.kernel.dev}/lib/modules/${pkgs.linuxPackages_latest.kernel.modDirVersion}/build M="$module_build" modules
-      module_dst="lib/modules/${pkgs.linuxPackages_latest.kernel.modDirVersion}/kernel/drivers/uio/chiplets_uio.ko"
+      PATH=${uioModuleBuildPath}:$PATH \
+        ${pkgs.gnumake}/bin/make -s -C ${x64Kernel.dev}/lib/modules/${x64Kernel.modDirVersion}/build M="$module_build" modules
+      module_dst="lib/modules/${x64Kernel.modDirVersion}/kernel/drivers/uio/chiplets_uio.ko"
       ${pkgs.coreutils}/bin/mkdir -p "$tmp/$(${pkgs.coreutils}/bin/dirname "$module_dst")"
       ${pkgs.coreutils}/bin/cp "$module_build/chiplets_uio.ko" "$tmp/$module_dst"
       printf '%s\n' "$module_dst" >> "$tmp/modules.txt"
@@ -165,7 +185,7 @@ EOF
         ${pkgs.gzip}/bin/gzip -9 > "$initrd") >/dev/null 2>&1
 
       exec ${pkgs.python3}/bin/python3 "$PWD/scripts/chiplets-uio-x64.py" \
-        --kernel ${pkgs.linuxPackages_latest.kernel}/bzImage \
+        --kernel ${x64KernelImage} \
         --initrd "$initrd" \
         "$@"
     '';
@@ -194,7 +214,7 @@ EOF
       tmp="$work_tmp/initrd"
       ${pkgs.coreutils}/bin/mkdir -p "$tmp"
 
-      ${pkgs.gzip}/bin/gzip -dc ${build-initrd pkgsArm64.linuxPackages_latest.kernel pkgsArm64.pkgsStatic.busybox "lib/modules/${pkgsArm64.linuxPackages_latest.kernel.modDirVersion}/kernel" } |
+      ${pkgs.gzip}/bin/gzip -dc ${a64Initrd} |
         (cd "$tmp" && ${pkgs.cpio}/bin/cpio -id --quiet)
       ${pkgs.coreutils}/bin/chmod -R u+w "$tmp"
 
@@ -214,36 +234,34 @@ EOF
 
       exec ${pkgs.python3}/bin/python3 "$PWD/scripts/chiplets-uio-x64.py" \
         --arch a64 \
-        --kernel ${pkgsArm64.linuxPackages_latest.kernel}/Image \
+        --kernel ${a64KernelImage} \
         --initrd "$initrd" \
         "$@"
     '';
     runuio-a64-backend-x64-frontend = pkgs.writeShellScriptBin "runuio-a64-backend-x64-frontend" ''
       exec ${runuio-a64}/bin/runuio-a64 \
         --frontend-arch x64 \
-        --frontend-kernel ${pkgs.linuxPackages_latest.kernel}/bzImage \
-        --frontend-initrd ${build-initrd pkgs.linuxPackages_latest.kernel pkgs.pkgsStatic.busybox "lib/modules/${pkgs.linuxPackages_latest.kernel.modDirVersion}/kernel" } \
+        --frontend-kernel ${x64KernelImage} \
+        --frontend-initrd ${x64Initrd} \
         "$@"
     '';
     runuio-x64-backend-a64-frontend = pkgs.writeShellScriptBin "runuio-x64-backend-a64-frontend" ''
       exec ${runuio-x64}/bin/runuio-x64 \
         --frontend-arch a64 \
-        --frontend-kernel ${pkgsArm64.linuxPackages_latest.kernel}/Image \
-        --frontend-initrd ${build-initrd pkgsArm64.linuxPackages_latest.kernel pkgsArm64.pkgsStatic.busybox "lib/modules/${pkgsArm64.linuxPackages_latest.kernel.modDirVersion}/kernel" } \
+        --frontend-kernel ${a64KernelImage} \
+        --frontend-initrd ${a64Initrd} \
         "$@"
     '';
   in
   {
+    packages.x86_64-linux = {
+      inherit runvm-x64 runvm-a64 runuio-x64 runuio-a64;
+      inherit runuio-a64-backend-x64-frontend;
+      inherit runuio-x64-backend-a64-frontend;
 
-    packages.x86_64-linux.runvm-x64 = runvm-x64;
-    packages.x86_64-linux.runvm-a64 = runvm-a64;
-    packages.x86_64-linux.runuio-x64 = runuio-x64;
-    packages.x86_64-linux.runuio-a64 = runuio-a64;
-    packages.x86_64-linux.runuio-a64-backend-x64-frontend = runuio-a64-backend-x64-frontend;
-    packages.x86_64-linux.runuio-x64-backend-a64-frontend = runuio-x64-backend-a64-frontend;
-    packages.x86_64-linux.x64 = runvm-x64;
-    packages.x86_64-linux.a64 = runvm-a64;
-    packages.x86_64-linux.default = runvm-x64;
-
+      x64 = runvm-x64;
+      a64 = runvm-a64;
+      default = runvm-x64;
+    };
   };
 }
