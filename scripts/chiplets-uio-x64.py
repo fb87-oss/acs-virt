@@ -316,7 +316,7 @@ def main() -> int:
     run_dir = Path(args.run_dir) if args.run_dir else Path(tempfile.mkdtemp(prefix=prefix, dir=os.environ.get("TMPDIR", "/tmp")))
     run_dir.mkdir(parents=True, exist_ok=True)
     include_console = frontend_arch != "a64" or args.mode != "benchmark"
-    notify_delay_us = 25000 if frontend_arch == "a64" else 50000
+    notify_delay_us = 25000
     notify_ack = not (backend_arch == "a64" and frontend_arch == "x64")
     profile_backend = os.environ.get("CHIPLETS_PROFILE_BACKEND") == "1"
     direct_read = os.environ.get("CHIPLETS_DIRECT_READ_DMA") == "1"
