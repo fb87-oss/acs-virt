@@ -1,0 +1,13 @@
+commit	write_mibs	read_mibs	status	description
+39b88c3	7.2	33.1	keep	baseline
+a14ebf7	0.0	0.0	crash	reduce x64 notify delay to 10000us
+cb6f3e7	11.3	33.2	keep	enable direct block read DMA by default
+ee2c769	9.7	33.2	discard	increase virtio-blk queue size to 512
+07d793d	11.2	33.1	discard	use direct DMA buffers for block writes
+2001423	16.2	71.8	keep	tune x64 notify delay to 25000us
+66212a6	30.1	77.5	keep	lower x64 notify delay to 20000us
+b528018	32.5	77.4	keep	test x64 notify delay at 15000us
+65af7b6	45.6	79.8	keep	probe x64 notify delay at 12500us
+d5a5882	0.0	0.0	crash	test x64 notify delay at 11000us
+5331d61	0.0	0.0	crash	test x64 notify delay at 12000us
+31b38f0	45.7	79.3	keep	test x64 notify delay at 13000us
