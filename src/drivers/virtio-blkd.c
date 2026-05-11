@@ -49,7 +49,7 @@ static bool blkd_profile_enabled(void) {
     if (enabled < 0) {
         const char *value = getenv("CHIPLETS_BLKD_PROFILE");
 
-        enabled = value && strcmp(value, "0") ? 1 : 0;
+        enabled = !value || strcmp(value, "0") ? 1 : 0;
     }
     return enabled != 0;
 }
