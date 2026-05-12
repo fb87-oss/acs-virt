@@ -240,7 +240,8 @@ static uint64_t get_features(void *opaque) {
 
     return (1ull << VIRTIO_BLK_F_SIZE_MAX) | (1ull << VIRTIO_BLK_F_SEG_MAX) |
            (1ull << VIRTIO_BLK_F_BLK_SIZE) | (1ull << VIRTIO_BLK_F_FLUSH) |
-           (1ull << VIRTIO_F_VERSION_1);
+           (1ull << VIRTIO_F_VERSION_1) |
+           (1ull << VIRTIO_F_ACCESS_PLATFORM);
 }
 
 /**
@@ -486,6 +487,7 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
 
     fprintf(stderr, "blkd: notify queue=%u\n", queue);
     if (queue != 0 || !dev->queue.ready) {
+        fabric_lower_irq(io);
         return true;
     }
 
@@ -493,10 +495,23 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
         uint16_t head;
         uint32_t used_len;
         bool available;
+        uint32_t retries = 0;
 
         if (!virtio_next_avail(&dev->queue, io, fabric_dma_read_u16, &head,
                                &available)) {
             return false;
+        }
+        if (!available) {
+            while (retries++ < 20) {
+                usleep(1000);
+                if (!virtio_next_avail(&dev->queue, io, fabric_dma_read_u16,
+                                       &head, &available)) {
+                    return false;
+                }
+                if (available) {
+                    break;
+                }
+            }
         }
         if (!available) {
             break;
@@ -533,6 +548,8 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
         if (profile_enabled) {
             profile_add(&profile.irq_ns, irq_start_ns);
         }
+    } else if (!fabric_lower_irq(io)) {
+        return false;
     }
 
     if (used_any && profile_enabled) {

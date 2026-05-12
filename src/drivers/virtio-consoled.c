@@ -102,7 +102,8 @@ bool cond_console_write(struct cond_console_backend *backend, const void *buf,
 static uint64_t get_features(void *opaque) {
     (void)opaque;
 
-    return (1ull << VIRTIO_CONSOLE_F_SIZE) | (1ull << VIRTIO_F_VERSION_1);
+    return (1ull << VIRTIO_CONSOLE_F_SIZE) | (1ull << VIRTIO_F_VERSION_1) |
+           (1ull << VIRTIO_F_ACCESS_PLATFORM);
 }
 
 /**
@@ -208,15 +209,18 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
 
     fprintf(stderr, "cond: notify queue=%u\n", queue_index);
     if (queue_index >= COND_QUEUE_COUNT) {
+        fabric_lower_irq(io);
         return true;
     }
     queue = &dev->queues[queue_index];
     if (!queue->ready) {
+        fabric_lower_irq(io);
         return true;
     }
 
     if (queue_index == 0) {
         /* No host input source exists yet, so keep guest RX buffers pending. */
+        fabric_lower_irq(io);
         return true;
     }
 
@@ -224,10 +228,23 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
         uint16_t head;
         uint32_t used_len = 0;
         bool available;
+        uint32_t retries = 0;
 
         if (!virtio_next_avail(queue, io, fabric_dma_read_u16, &head,
                                &available)) {
             return false;
+        }
+        if (!available) {
+            while (retries++ < 20) {
+                usleep(1000);
+                if (!virtio_next_avail(queue, io, fabric_dma_read_u16, &head,
+                                       &available)) {
+                    return false;
+                }
+                if (available) {
+                    break;
+                }
+            }
         }
         if (!available) {
             break;
@@ -250,6 +267,8 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
         if (!fabric_raise_irq(io)) {
             return false;
         }
+    } else if (!fabric_lower_irq(io)) {
+        return false;
     }
 
     return true;

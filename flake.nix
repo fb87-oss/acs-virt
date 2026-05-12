@@ -46,7 +46,7 @@
 
       # Some kernels build virtio pieces in; modular kernels may need dependency
       # retries because this tiny initrd does not run full modprobe.
-      for module in virtio virtio_ring virtio_mmio virtio_blk virtio_console uio; do
+      for module in virtio virtio_ring virtio_mmio virtio_blk virtio_console uio axi_mmio; do
         modprobe "$module" 2>/dev/null || true
       done
       modprobe uio_pdrv_genirq of_id=chiplets,uio 2>/dev/null || true
@@ -149,14 +149,20 @@
       module_build="$tmp/chiplets-uio-module"
       ${pkgs.coreutils}/bin/mkdir -p "$module_build"
       ${pkgs.coreutils}/bin/cp "$PWD/src/kernel/chiplets_uio.c" "$module_build/chiplets_uio.c"
+      ${pkgs.coreutils}/bin/cp "$PWD/src/kernel/axi_mmio.c" "$module_build/axi_mmio.c"
       cat > "$module_build/Makefile" <<'EOF'
 obj-m += chiplets_uio.o
+obj-m += axi_mmio.o
 EOF
       PATH=${uioModuleBuildPath}:$PATH \
         ${pkgs.gnumake}/bin/make -s -C ${x64Kernel.dev}/lib/modules/${x64Kernel.modDirVersion}/build M="$module_build" modules
       module_dst="lib/modules/${x64Kernel.modDirVersion}/kernel/drivers/uio/chiplets_uio.ko"
       ${pkgs.coreutils}/bin/mkdir -p "$tmp/$(${pkgs.coreutils}/bin/dirname "$module_dst")"
       ${pkgs.coreutils}/bin/cp "$module_build/chiplets_uio.ko" "$tmp/$module_dst"
+      printf '%s\n' "$module_dst" >> "$tmp/modules.txt"
+      module_dst="lib/modules/${x64Kernel.modDirVersion}/kernel/drivers/virtio/axi_mmio.ko"
+      ${pkgs.coreutils}/bin/mkdir -p "$tmp/$(${pkgs.coreutils}/bin/dirname "$module_dst")"
+      ${pkgs.coreutils}/bin/cp "$module_build/axi_mmio.ko" "$tmp/$module_dst"
       printf '%s\n' "$module_dst" >> "$tmp/modules.txt"
 
       ${pkgs.coreutils}/bin/mkdir -p "$tmp/bin"

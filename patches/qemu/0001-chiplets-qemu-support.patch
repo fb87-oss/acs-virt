@@ -169,7 +169,7 @@ new file mode 100644
 index 0000000000..14521bdf7f
 --- /dev/null
 +++ b/hw/misc/axi.c
-@@ -0,0 +1,929 @@
+@@ -0,0 +1,938 @@
 +/*
 + * Emulated AXI fabric proxy device.
 + *
@@ -898,11 +898,20 @@ index 0000000000..14521bdf7f
 +        return;
 +    }
 +
-+    nodename = g_strdup_printf("/virtio_mmio@%" PRIx64, s->base);
++    nodename = g_strdup_printf("/%s@%" PRIx64,
++                               s->dma_size ? "axi_mmio" : "virtio_mmio",
++                               s->base);
 +    qemu_fdt_add_subnode(ms->fdt, nodename);
-+    qemu_fdt_setprop_string(ms->fdt, nodename, "compatible", "virtio,mmio");
-+    qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg",
-+                                 2, s->base, 2, s->size);
++    qemu_fdt_setprop_string(ms->fdt, nodename, "compatible",
++                            s->dma_size ? "axi,mmio" : "virtio,mmio");
++    if (s->dma_size) {
++        qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg",
++                                     2, s->base, 2, s->size,
++                                     2, s->dma_base, 2, s->dma_size);
++    } else {
++        qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg",
++                                     2, s->base, 2, s->size);
++    }
 +    qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupts",
 +                           GIC_FDT_IRQ_TYPE_SPI, s->irq_num,
 +                           GIC_FDT_IRQ_FLAGS_EDGE_LO_HI);
@@ -1112,7 +1121,7 @@ index 86596ef8bc..9f2bd7bb47 100644
 diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 --- a/hw/i386/acpi-microvm.c
 +++ b/hw/i386/acpi-microvm.c
-@@ -46,5 +46,70 @@
+@@ -46,5 +46,91 @@
  
  #include CONFIG_DEVICES
  
@@ -1141,6 +1150,27 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +
 +    crs = aml_resource_template();
 +    axi_acpi_append_memory(crs, base, size);
++    aml_append(crs,
++               aml_interrupt(AML_CONSUMER, AML_EDGE, AML_ACTIVE_HIGH,
++                             AML_EXCLUSIVE, &irq, 1));
++    aml_append(dev, aml_name_decl("_CRS", crs));
++    aml_append(scope, dev);
++}
++
++static void axi_acpi_frontend_dsdt_add(Aml *scope, hwaddr base, hwaddr size,
++                                       hwaddr dma_base, hwaddr dma_size,
++                                       uint32_t irq, unsigned int index)
++{
++    Aml *dev = aml_device("AM%02u", index);
++    Aml *crs;
++
++    aml_append(dev, aml_name_decl("_HID", aml_string("AXI0001")));
++    aml_append(dev, aml_name_decl("_UID", aml_int(index)));
++    aml_append(dev, aml_name_decl("_CCA", aml_int(1)));
++
++    crs = aml_resource_template();
++    axi_acpi_append_memory(crs, base, size);
++    axi_acpi_append_memory(crs, dma_base, dma_size);
 +    aml_append(crs,
 +               aml_interrupt(AML_CONSUMER, AML_EDGE, AML_ACTIVE_HIGH,
 +                             AML_EXCLUSIVE, &irq, 1));
@@ -1183,7 +1213,7 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +}
  static void acpi_dsdt_add_virtio(Aml *scope,
                                   MicrovmMachineState *mms)
-@@ -51,6 +116,7 @@ static void acpi_dsdt_add_virtio(Aml *scope,
+@@ -51,6 +137,7 @@ static void acpi_dsdt_add_virtio(Aml *scope,
  {
      gchar *separator;
      long int index;
@@ -1191,7 +1221,7 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
      BusState *bus;
      BusChild *kid;
  
-@@ -81,6 +147,66 @@ static void acpi_dsdt_add_virtio(Aml *scope,
+@@ -81,6 +168,81 @@ static void acpi_dsdt_add_virtio(Aml *scope,
              virtio_acpi_dsdt_add(scope, base, size, irq, index, 1);
          }
      }
@@ -1233,9 +1263,24 @@ diff --git a/hw/i386/acpi-microvm.c b/hw/i386/acpi-microvm.c
 +            if (err) {
 +                err = NULL;
 +            }
-+            if (g_strcmp0(mode ?: "socket", "uio") ||
-+                !g_strcmp0(role ?: "slave", "slave")) {
++            if (g_strcmp0(mode ?: "socket", "uio")) {
 +                axi_acpi_dsdt_add(scope, base, size, irq, irq);
++                continue;
++            }
++            if (!g_strcmp0(role ?: "slave", "slave")) {
++                err = NULL;
++                dma_base = object_property_get_uint(obj, "dma-base", &err);
++                if (err) {
++                    dma_base = 0;
++                }
++                err = NULL;
++                dma_size = object_property_get_uint(obj, "dma-size", &err);
++                if (!err && dma_size) {
++                    axi_acpi_frontend_dsdt_add(scope, base, size, dma_base,
++                                               dma_size, irq, irq);
++                } else {
++                    axi_acpi_dsdt_add(scope, base, size, irq, irq);
++                }
 +                continue;
 +            }
 +            if (err || g_strcmp0(role, "master")) {

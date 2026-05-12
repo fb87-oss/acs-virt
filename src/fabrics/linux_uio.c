@@ -344,6 +344,13 @@ static void refresh_read_registers(const struct fabric_device *dev) {
 static bool poll_write_registers(const struct fabric_device *dev,
                                  struct fabric_io *io, uint32_t *shadow,
                                  const uint64_t *offsets, size_t count) {
+    static const uint64_t queue_state_offsets[] = {
+        VIRTIO_MMIO_QUEUE_NUM,       VIRTIO_MMIO_QUEUE_READY,
+        VIRTIO_MMIO_QUEUE_DESC_LOW,  VIRTIO_MMIO_QUEUE_DESC_HIGH,
+        VIRTIO_MMIO_QUEUE_AVAIL_LOW, VIRTIO_MMIO_QUEUE_AVAIL_HIGH,
+        VIRTIO_MMIO_QUEUE_USED_LOW,  VIRTIO_MMIO_QUEUE_USED_HIGH,
+    };
+
     for (size_t i = 0; i < count; i++) {
         uint64_t off = offsets[i];
         uint32_t value;
@@ -361,7 +368,23 @@ static bool poll_write_registers(const struct fabric_device *dev,
             return false;
         }
 
-        if (off == VIRTIO_MMIO_QUEUE_NOTIFY) {
+        if (off == VIRTIO_MMIO_QUEUE_SEL) {
+            /* QEMU clears these shared registers on select; guest rewrites are
+             * delivered as later interrupts and must not be confused with the
+             * synthetic clear for the new selection.
+             */
+            for (size_t q = 0; q < sizeof(queue_state_offsets) /
+                                       sizeof(queue_state_offsets[0]);
+                 q++) {
+                for (size_t j = 0; j < count; j++) {
+                    if (offsets[j] == queue_state_offsets[q] &&
+                        offsets[j] + 4 <= dev->size &&
+                        offsets[j] + 4 <= g_uio.mmio.size) {
+                        shadow[j] = load_le32(g_uio.mmio.addr + offsets[j]);
+                    }
+                }
+            }
+        } else if (off == VIRTIO_MMIO_QUEUE_NOTIFY) {
             store_le32(g_uio.mmio.addr + off, UIO_NOTIFY_IDLE);
             shadow[i] = UIO_NOTIFY_IDLE;
         } else if (off == VIRTIO_MMIO_INTERRUPT_ACK) {

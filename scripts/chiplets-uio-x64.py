@@ -16,6 +16,7 @@ from pathlib import Path
 
 MEMORY_SIZE = 512 * 1024 * 1024
 MEMORY_ARG = "512M"
+CMA_SIZE = 16 * 1024 * 1024
 MMIO_SIZE = 0x1000
 BACKEND_ADDR_OFFSET = 0x0010_0000_0000
 FRONTEND_ADDR_OFFSET = 0x0020_0000_0000
@@ -221,7 +222,7 @@ def axi_device_arg(name: str, base: int, irq: int, memdev: str, control: Path,
         parts.extend([
             f"dma-memdev={dma_memdev}",
             f"dma-base=0x{dma_base:x}",
-            f"dma-size={MEMORY_SIZE}",
+            f"dma-size={CMA_SIZE}",
         ])
     return ",".join(parts)
 
@@ -337,11 +338,11 @@ def main() -> int:
     blkd_prefix = " ".join(blkd_env)
     if blkd_prefix:
         blkd_prefix += " "
-    backend_frontend_ram_base = (
-        BACKEND_ADDR_OFFSET + int(frontend_config["frontend_ram_base"])
-    )
+    frontend_cma_base = int(frontend_config["frontend_ram_base"]) + MEMORY_SIZE + 0x1000_0000
+    backend_frontend_cma_base = BACKEND_ADDR_OFFSET + frontend_cma_base
 
     frontend_ram = run_dir / "frontend.ram"
+    frontend_cma = run_dir / "frontend.cma"
     backend_ram = run_dir / "backend.ram"
     blk_mmio = run_dir / "blk.mmio"
     con_mmio = run_dir / "con.mmio"
@@ -351,7 +352,8 @@ def main() -> int:
     frontend_log = run_dir / "frontend.log"
     backend_log = run_dir / "backend.log"
 
-    for path, size in ((frontend_ram, MEMORY_SIZE), (backend_ram, MEMORY_SIZE),
+    for path, size in ((frontend_ram, MEMORY_SIZE), (frontend_cma, CMA_SIZE),
+                       (backend_ram, MEMORY_SIZE),
                        (blk_mmio, MMIO_SIZE), (con_mmio, MMIO_SIZE)):
         truncate(path, size)
 
@@ -368,6 +370,7 @@ def main() -> int:
         f"unix:{qmp},server=on,wait=off",
     ])
     frontend_args.extend(memory_object_args("blkmmio", blk_mmio, MMIO_SIZE))
+    frontend_args.extend(memory_object_args("frontendcma", frontend_cma, CMA_SIZE))
     if include_console:
         frontend_args.extend(memory_object_args("conmmio", con_mmio, MMIO_SIZE))
     frontend_args.extend([
@@ -375,8 +378,8 @@ def main() -> int:
         axi_device_arg("blk0", int(frontend_config["frontend_blk_base"]),
                        int(frontend_config["blk_irq"]),
                        "blkmmio", blk_control, "slave",
-                       backend_frontend_ram_base,
-                       notify_delay_us, notify_ack),
+                       frontend_cma_base,
+                       notify_delay_us, notify_ack, "frontendcma"),
     ])
     if include_console:
         frontend_args.extend([
@@ -384,8 +387,8 @@ def main() -> int:
             axi_device_arg("con0", int(frontend_config["frontend_con_base"]),
                            int(frontend_config["con_irq"]),
                            "conmmio", con_control, "slave",
-                           backend_frontend_ram_base,
-                           notify_delay_us, notify_ack),
+                           frontend_cma_base,
+                           notify_delay_us, notify_ack, "frontendcma"),
         ])
 
     backend_args = common_qemu_args(
@@ -398,14 +401,14 @@ def main() -> int:
     backend_args.extend(memory_object_args("blkmmio", blk_mmio, MMIO_SIZE))
     if include_console:
         backend_args.extend(memory_object_args("conmmio", con_mmio, MMIO_SIZE))
-    backend_args.extend(memory_object_args("frontendram", frontend_ram, MEMORY_SIZE))
+    backend_args.extend(memory_object_args("frontendcma", frontend_cma, CMA_SIZE))
     backend_args.extend([
         "-device",
         axi_device_arg("blk0", int(backend_config["backend_blk_base"]),
                        int(backend_config["blk_irq"]),
                        "blkmmio", blk_control, "master",
-                       backend_frontend_ram_base, None, None,
-                       "frontendram"),
+                       backend_frontend_cma_base, None, None,
+                       "frontendcma"),
     ])
     if include_console:
         backend_args.extend([
@@ -413,8 +416,8 @@ def main() -> int:
             axi_device_arg("con0", int(backend_config["backend_con_base"]),
                            int(backend_config["con_irq"]),
                            "conmmio", con_control, "master",
-                           backend_frontend_ram_base, None, None,
-                           "frontendram"),
+                           backend_frontend_cma_base, None, None,
+                           "frontendcma"),
         ])
 
     processes: list[subprocess.Popen] = []
@@ -431,8 +434,8 @@ def main() -> int:
         activate_shell(backend, backend_log, args.timeout)
 
         image_size_mb = max(64, args.bench_size_mb)
-        uio_blk_endpoint = f"uio:/dev/uio0:0x200:0x{int(frontend_config['frontend_ram_base']):x}"
-        uio_con_endpoint = f"uio:/dev/uio1:0x200:0x{int(frontend_config['frontend_ram_base']):x}"
+        uio_blk_endpoint = f"uio:/dev/uio0:0x200:0x{frontend_cma_base:x}"
+        uio_con_endpoint = f"uio:/dev/uio1:0x200:0x{frontend_cma_base:x}"
         if args.mode == "benchmark":
             backend_disk_setup = f"""
 if [ -x /bin/uio-membench ]; then
