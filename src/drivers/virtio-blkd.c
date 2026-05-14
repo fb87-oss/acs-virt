@@ -485,10 +485,17 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
     bool profile_enabled = blkd_profile_enabled();
     struct blkd_profile_sample profile = {0};
 
+    /* QEMU's UIO notify-ack path requires a control write even when a stale
+     * notify has no descriptors. Preserve any completion IRQ already pending.
+     */
+    #define BLKD_ACK_NOTIFY()                                                   \
+        ((dev->vdev.interrupt_status & VIRTIO_INTERRUPT_VRING)                  \
+             ? fabric_raise_irq(io)                                             \
+             : fabric_lower_irq(io))
+
     fprintf(stderr, "blkd: notify queue=%u\n", queue);
     if (queue != 0 || !dev->queue.ready) {
-        fabric_lower_irq(io);
-        return true;
+        return BLKD_ACK_NOTIFY();
     }
 
     for (;;) {
@@ -548,7 +555,7 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
         if (profile_enabled) {
             profile_add(&profile.irq_ns, irq_start_ns);
         }
-    } else if (!fabric_lower_irq(io)) {
+    } else if (!BLKD_ACK_NOTIFY()) {
         return false;
     }
 
@@ -561,6 +568,7 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
                 profile.image_io_ns, profile.add_used_ns, profile.irq_ns);
     }
 
+    #undef BLKD_ACK_NOTIFY
     return true;
 }
 

@@ -207,21 +207,26 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
     struct virtio_queue *queue;
     bool used_any = false;
 
+    /* Ack stale/no-work UIO notifications without dropping a pending used-ring
+     * interrupt that the frontend has not acknowledged yet.
+     */
+    #define COND_ACK_NOTIFY()                                                   \
+        ((dev->vdev.interrupt_status & VIRTIO_INTERRUPT_VRING)                  \
+             ? fabric_raise_irq(io)                                             \
+             : fabric_lower_irq(io))
+
     fprintf(stderr, "cond: notify queue=%u\n", queue_index);
     if (queue_index >= COND_QUEUE_COUNT) {
-        fabric_lower_irq(io);
-        return true;
+        return COND_ACK_NOTIFY();
     }
     queue = &dev->queues[queue_index];
     if (!queue->ready) {
-        fabric_lower_irq(io);
-        return true;
+        return COND_ACK_NOTIFY();
     }
 
     if (queue_index == 0) {
         /* No host input source exists yet, so keep guest RX buffers pending. */
-        fabric_lower_irq(io);
-        return true;
+        return COND_ACK_NOTIFY();
     }
 
     for (;;) {
@@ -267,10 +272,11 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
         if (!fabric_raise_irq(io)) {
             return false;
         }
-    } else if (!fabric_lower_irq(io)) {
+    } else if (!COND_ACK_NOTIFY()) {
         return false;
     }
 
+    #undef COND_ACK_NOTIFY
     return true;
 }
 

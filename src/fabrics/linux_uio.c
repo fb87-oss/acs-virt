@@ -37,9 +37,10 @@ struct uio_state {
     struct uio_config config; ///< Parsed endpoint configuration.
     struct uio_mapping mmio;  ///< Resource0: virtio-mmio and control window.
     struct uio_mapping dma;   ///< Resource1: frontend RAM DMA window.
+    int pending_irq_level;    ///< Deferred IRQ-control write, or -1 for none.
 };
 
-static struct uio_state g_uio = {.fd = -1};
+static struct uio_state g_uio = {.fd = -1, .pending_irq_level = -1};
 
 /**
  * @brief Loads a little-endian 32-bit value from a mapped register.
@@ -327,6 +328,20 @@ static void refresh_read_registers(const struct fabric_device *dev) {
     }
 }
 
+/** @brief Applies a deferred IRQ-control write after register publication. */
+static bool flush_pending_irq_level(void) {
+    if (g_uio.pending_irq_level < 0) {
+        return true;
+    }
+    if (g_uio.config.irq_control_offset + 4 > g_uio.mmio.size) {
+        return false;
+    }
+    store_le32(g_uio.mmio.addr + g_uio.config.irq_control_offset,
+               g_uio.pending_irq_level ? 1 : 0);
+    g_uio.pending_irq_level = -1;
+    return true;
+}
+
 /**
  * @brief Dispatches changed guest-writable virtio-mmio registers.
  *
@@ -363,6 +378,16 @@ static bool poll_write_registers(const struct fabric_device *dev,
         if (value == shadow[i]) {
             continue;
         }
+
+        if (off == VIRTIO_MMIO_QUEUE_NOTIFY) {
+            store_le32(g_uio.mmio.addr + off, UIO_NOTIFY_IDLE);
+            shadow[i] = UIO_NOTIFY_IDLE;
+            if (!dev->ops->write(dev->opaque, io, off, value, 4)) {
+                return false;
+            }
+            continue;
+        }
+
         shadow[i] = value;
         if (!dev->ops->write(dev->opaque, io, off, value, 4)) {
             return false;
@@ -384,9 +409,6 @@ static bool poll_write_registers(const struct fabric_device *dev,
                     }
                 }
             }
-        } else if (off == VIRTIO_MMIO_QUEUE_NOTIFY) {
-            store_le32(g_uio.mmio.addr + off, UIO_NOTIFY_IDLE);
-            shadow[i] = UIO_NOTIFY_IDLE;
         } else if (off == VIRTIO_MMIO_INTERRUPT_ACK) {
             store_le32(g_uio.mmio.addr + off, 0);
             shadow[i] = 0;
@@ -463,8 +485,8 @@ bool fabric_run(struct fabric *fabric) {
         VIRTIO_MMIO_QUEUE_AVAIL_HIGH,
         VIRTIO_MMIO_QUEUE_USED_LOW,
         VIRTIO_MMIO_QUEUE_USED_HIGH,
-        VIRTIO_MMIO_QUEUE_NOTIFY,
         VIRTIO_MMIO_INTERRUPT_ACK,
+        VIRTIO_MMIO_QUEUE_NOTIFY,
         VIRTIO_MMIO_STATUS,
     };
     uint32_t shadow[sizeof(write_offsets) / sizeof(write_offsets[0])] = {0};
@@ -534,6 +556,10 @@ bool fabric_run(struct fabric *fabric) {
             return false;
         }
         refresh_read_registers(dev);
+        if (!flush_pending_irq_level()) {
+            cleanup_uio();
+            return false;
+        }
     }
 }
 
@@ -671,10 +697,7 @@ bool fabric_dma_write(struct fabric_io *io, uint64_t gpa, const void *data,
  */
 bool fabric_raise_irq(struct fabric_io *io) {
     (void)io;
-    if (g_uio.config.irq_control_offset + 4 > g_uio.mmio.size) {
-        return false;
-    }
-    store_le32(g_uio.mmio.addr + g_uio.config.irq_control_offset, 1);
+    g_uio.pending_irq_level = 1;
     return true;
 }
 
@@ -686,9 +709,6 @@ bool fabric_raise_irq(struct fabric_io *io) {
  */
 bool fabric_lower_irq(struct fabric_io *io) {
     (void)io;
-    if (g_uio.config.irq_control_offset + 4 > g_uio.mmio.size) {
-        return false;
-    }
-    store_le32(g_uio.mmio.addr + g_uio.config.irq_control_offset, 0);
+    g_uio.pending_irq_level = 0;
     return true;
 }
