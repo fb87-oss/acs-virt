@@ -66,6 +66,27 @@ static bool blkd_direct_read_enabled(void) {
     return enabled != 0;
 }
 
+/** @brief Returns whether verbose per-notification logging is enabled. */
+static bool blkd_debug_enabled(void) {
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *value = getenv("CHIPLETS_BLKD_DEBUG");
+
+        enabled = value && strcmp(value, "0") ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+/** @brief Acknowledges a stale/no-work UIO notify without dropping an IRQ. */
+static bool blkd_ack_notify(struct blkd_virtio_device *dev,
+                            struct fabric_io *io) {
+    if (dev->vdev.interrupt_status & VIRTIO_INTERRUPT_VRING) {
+        return fabric_raise_irq(io);
+    }
+    return fabric_lower_irq(io);
+}
+
 /** @brief Adds elapsed monotonic nanoseconds to a counter. */
 static void profile_add(uint64_t *counter, uint64_t start_ns) {
     uint64_t end_ns;
@@ -339,8 +360,6 @@ static bool process_chain(struct blkd_virtio_device *dev, struct fabric_io *io,
     uint64_t chain_start_ns = profile ? monotonic_ns() : 0;
     bool direct_read = blkd_direct_read_enabled();
 
-    fprintf(stderr, "blkd: read descriptor chain head=%u\n", head);
-
     if (!virtio_read_desc(&dev->queue, io, fabric_dma_read, head,
                           &header_desc) ||
         !(header_desc.flags & VRING_DESC_F_NEXT) ||
@@ -485,17 +504,11 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
     bool profile_enabled = blkd_profile_enabled();
     struct blkd_profile_sample profile = {0};
 
-    /* QEMU's UIO notify-ack path requires a control write even when a stale
-     * notify has no descriptors. Preserve any completion IRQ already pending.
-     */
-    #define BLKD_ACK_NOTIFY()                                                   \
-        ((dev->vdev.interrupt_status & VIRTIO_INTERRUPT_VRING)                  \
-             ? fabric_raise_irq(io)                                             \
-             : fabric_lower_irq(io))
-
-    fprintf(stderr, "blkd: notify queue=%u\n", queue);
+    if (blkd_debug_enabled()) {
+        fprintf(stderr, "blkd: notify queue=%u\n", queue);
+    }
     if (queue != 0 || !dev->queue.ready) {
-        return BLKD_ACK_NOTIFY();
+        return blkd_ack_notify(dev, io);
     }
 
     for (;;) {
@@ -524,7 +537,9 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
             break;
         }
 
-        fprintf(stderr, "blkd: process head=%u\n", head);
+        if (blkd_debug_enabled()) {
+            fprintf(stderr, "blkd: process head=%u\n", head);
+        }
         if (!process_chain(dev, io, head, &used_len,
                            profile_enabled ? &profile : NULL)) {
             return false;
@@ -555,7 +570,7 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
         if (profile_enabled) {
             profile_add(&profile.irq_ns, irq_start_ns);
         }
-    } else if (!BLKD_ACK_NOTIFY()) {
+    } else if (!blkd_ack_notify(dev, io)) {
         return false;
     }
 
@@ -568,7 +583,6 @@ bool blkd_virtio_notify_queue(struct blkd_virtio_device *dev,
                 profile.image_io_ns, profile.add_used_ns, profile.irq_ns);
     }
 
-    #undef BLKD_ACK_NOTIFY
     return true;
 }
 

@@ -93,6 +93,15 @@ bool cond_console_write(struct cond_console_backend *backend, const void *buf,
     return write_all(backend->fd, buf, len);
 }
 
+/** @brief Acknowledges a stale/no-work UIO notify without dropping an IRQ. */
+static bool cond_ack_notify(struct cond_virtio_device *dev,
+                            struct fabric_io *io) {
+    if (dev->vdev.interrupt_status & VIRTIO_INTERRUPT_VRING) {
+        return fabric_raise_irq(io);
+    }
+    return fabric_lower_irq(io);
+}
+
 /**
  * @brief Returns virtio-console feature bits exposed to the guest.
  *
@@ -207,26 +216,17 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
     struct virtio_queue *queue;
     bool used_any = false;
 
-    /* Ack stale/no-work UIO notifications without dropping a pending used-ring
-     * interrupt that the frontend has not acknowledged yet.
-     */
-    #define COND_ACK_NOTIFY()                                                   \
-        ((dev->vdev.interrupt_status & VIRTIO_INTERRUPT_VRING)                  \
-             ? fabric_raise_irq(io)                                             \
-             : fabric_lower_irq(io))
-
-    fprintf(stderr, "cond: notify queue=%u\n", queue_index);
     if (queue_index >= COND_QUEUE_COUNT) {
-        return COND_ACK_NOTIFY();
+        return cond_ack_notify(dev, io);
     }
     queue = &dev->queues[queue_index];
     if (!queue->ready) {
-        return COND_ACK_NOTIFY();
+        return cond_ack_notify(dev, io);
     }
 
     if (queue_index == 0) {
         /* No host input source exists yet, so keep guest RX buffers pending. */
-        return COND_ACK_NOTIFY();
+        return cond_ack_notify(dev, io);
     }
 
     for (;;) {
@@ -255,7 +255,6 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
             break;
         }
 
-        fprintf(stderr, "cond: process queue=%u head=%u\n", queue_index, head);
         if (!process_tx_chain(dev, queue, io, head, &used_len)) {
             return false;
         }
@@ -272,11 +271,10 @@ bool cond_virtio_notify_queue(struct cond_virtio_device *dev,
         if (!fabric_raise_irq(io)) {
             return false;
         }
-    } else if (!COND_ACK_NOTIFY()) {
+    } else if (!cond_ack_notify(dev, io)) {
         return false;
     }
 
-    #undef COND_ACK_NOTIFY
     return true;
 }
 
