@@ -63,11 +63,23 @@ of UIO `map1`; it is `0` for x64 microvm frontends and `0x40000000` for ARM64
 ## Notification Flow
 
 The frontend and backend QEMU processes use a Unix control socket per device.
-Frontend MMIO reads and writes send a frontend-notify message to the backend
-QEMU. The backend QEMU turns that message into an interrupt on the backend UIO
-device. The backend daemon blocks in `read(/dev/uioX)` until Linux delivers the
-interrupt, then re-enables the UIO IRQ and scans the writable virtio-mmio
-registers.
+By default, frontend MMIO reads and writes send a frontend-notify message to the
+backend QEMU. The backend QEMU turns that message into an interrupt on the
+backend UIO device. The backend daemon blocks in `read(/dev/uioX)` until Linux
+delivers the interrupt, then re-enables the UIO IRQ and scans the writable
+virtio-mmio registers.
+
+Set `CHIPLETS_UIO_NOTIFY_POLICY=barrier` to reduce frontend-to-backend control
+round trips. In this mode, frontend QEMU updates the shared MMIO window for all
+accesses but only notifies the backend for transport barrier writes: feature
+selection/negotiation, queue selection, queue ready, interrupt ACK, queue notify,
+and device status. This keeps setup, kicks, and ACKs ordered while avoiding a
+backend round trip for ordinary cached reads and queue address writes.
+
+With `barrier`, queue notify writes are sent asynchronously and coalesced while
+an ACK is outstanding. Setup and status barriers still wait for the backend ACK
+so feature negotiation and queue publication observe fresh shared-MMIO state, but
+data-path kicks do not serialize the frontend on backend request completion.
 
 Backend-to-frontend interrupts use the same shared MMIO window. When a daemon
 needs to raise or lower a virtio interrupt, it writes the control word at offset
@@ -172,14 +184,22 @@ The ARM64 benchmark wrapper is:
 tests/run-benchmark-a64.sh
 ```
 
-The benchmark defaults to a small `1MiB` transfer because the current
-`axi-linux-uio` path is functional but slow; larger transfers can be requested
-with `BENCH_SIZE_MB`.
+The benchmark defaults to a small `1MiB` transfer for quick smoke coverage;
+larger transfers can be requested with `BENCH_SIZE_MB`.
 Set `BENCH_REPEAT` to run the write/read benchmark multiple times within the
 same VM pair and print min/average/max throughput summaries:
 
 ```sh
 BENCH_REPEAT=3 BENCH_SIZE_MB=64 tests/run-benchmark.sh
+```
+
+The AXI UIO frontend notification policy can be switched at runtime. The default
+`all` policy preserves one backend notification per frontend MMIO access. The
+`barrier` policy batches shared-MMIO updates and notifies only on transport
+barrier writes:
+
+```sh
+CHIPLETS_UIO_NOTIFY_POLICY=barrier BENCH_REPEAT=3 BENCH_SIZE_MB=64 tests/run-benchmark.sh
 ```
 
 Backend request timing can be enabled for benchmark runs with
@@ -224,3 +244,16 @@ ARM64 UIO benchmark:
 
 Before advertising the segment limits, the same 64MiB write path issued `16384`
 backend write requests, effectively one 4KiB request at a time.
+
+Recorded on 2026-05-14 on branch `perf/uio-mmio-notify-cache` with
+`CHIPLETS_UIO_NOTIFY_POLICY=barrier BENCH_SIZE_MB=64 BENCH_BS=64K
+BENCH_REPEAT=3` after async/coalesced queue notify:
+
+```text
+x64 UIO barrier benchmark:
+  write summary: min=83.0MiB/s avg=87.2MiB/s max=95.0MiB/s
+  read summary:  min=94.6MiB/s avg=95.6MiB/s max=96.8MiB/s
+  backend requests: read=58 write=396 flush=0
+  backend profile: requests=454 chain_avg_us=3083.5 guest_dma_avg_us=147.9
+                   image_io_avg_us=197.5 add_used_avg_us=0.7 irq_avg_us=0.1
+```

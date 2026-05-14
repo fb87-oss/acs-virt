@@ -202,6 +202,7 @@ def axi_device_arg(name: str, base: int, irq: int, memdev: str, control: Path,
                    role: str, dma_base: int,
                    notify_delay_us: int | None = None,
                    notify_ack: bool | None = None,
+                   notify_policy: str | None = None,
                    dma_memdev: str | None = None) -> str:
     parts = [
         "axi",
@@ -218,6 +219,8 @@ def axi_device_arg(name: str, base: int, irq: int, memdev: str, control: Path,
         parts.append(f"notify-delay-us={notify_delay_us}")
     if notify_ack is not None:
         parts.append(f"notify-ack={'on' if notify_ack else 'off'}")
+    if notify_policy is not None:
+        parts.append(f"notify-policy={notify_policy}")
     if dma_memdev:
         parts.extend([
             f"dma-memdev={dma_memdev}",
@@ -328,6 +331,9 @@ def main() -> int:
     include_console = frontend_arch != "a64" or args.mode != "benchmark"
     notify_delay_us = 15000 if frontend_arch == "x64" else 25000
     notify_ack = not (backend_arch == "a64" and frontend_arch == "x64")
+    notify_policy = os.environ.get("CHIPLETS_UIO_NOTIFY_POLICY", "all")
+    if notify_policy not in ("all", "barrier"):
+        raise ValueError("CHIPLETS_UIO_NOTIFY_POLICY must be 'all' or 'barrier'")
     profile_backend = os.environ.get("CHIPLETS_PROFILE_BACKEND") == "1"
     direct_read = os.environ.get("CHIPLETS_DIRECT_READ_DMA") == "1"
     blkd_env = []
@@ -376,19 +382,21 @@ def main() -> int:
     frontend_args.extend([
         "-device",
         axi_device_arg("blk0", int(frontend_config["frontend_blk_base"]),
-                       int(frontend_config["blk_irq"]),
-                       "blkmmio", blk_control, "slave",
-                       frontend_cma_base,
-                       notify_delay_us, notify_ack, "frontendcma"),
+                        int(frontend_config["blk_irq"]),
+                        "blkmmio", blk_control, "slave",
+                        frontend_cma_base,
+                        notify_delay_us, notify_ack, notify_policy,
+                        "frontendcma"),
     ])
     if include_console:
         frontend_args.extend([
             "-device",
             axi_device_arg("con0", int(frontend_config["frontend_con_base"]),
-                           int(frontend_config["con_irq"]),
-                           "conmmio", con_control, "slave",
-                           frontend_cma_base,
-                           notify_delay_us, notify_ack, "frontendcma"),
+                            int(frontend_config["con_irq"]),
+                            "conmmio", con_control, "slave",
+                            frontend_cma_base,
+                            notify_delay_us, notify_ack, notify_policy,
+                            "frontendcma"),
         ])
 
     backend_args = common_qemu_args(
@@ -405,19 +413,19 @@ def main() -> int:
     backend_args.extend([
         "-device",
         axi_device_arg("blk0", int(backend_config["backend_blk_base"]),
-                       int(backend_config["blk_irq"]),
-                       "blkmmio", blk_control, "master",
-                       backend_frontend_cma_base, None, None,
-                       "frontendcma"),
+                        int(backend_config["blk_irq"]),
+                        "blkmmio", blk_control, "master",
+                        backend_frontend_cma_base, None, None, None,
+                        "frontendcma"),
     ])
     if include_console:
         backend_args.extend([
             "-device",
             axi_device_arg("con0", int(backend_config["backend_con_base"]),
-                           int(backend_config["con_irq"]),
-                           "conmmio", con_control, "master",
-                           backend_frontend_cma_base, None, None,
-                           "frontendcma"),
+                            int(backend_config["con_irq"]),
+                            "conmmio", con_control, "master",
+                            backend_frontend_cma_base, None, None, None,
+                            "frontendcma"),
         ])
 
     processes: list[subprocess.Popen] = []

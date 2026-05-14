@@ -169,7 +169,7 @@ new file mode 100644
 index 0000000000..14521bdf7f
 --- /dev/null
 +++ b/hw/misc/axi.c
-@@ -0,0 +1,938 @@
+@@ -0,0 +1,1009 @@
 +/*
 + * Emulated AXI fabric proxy device.
 + *
@@ -223,6 +223,11 @@ index 0000000000..14521bdf7f
 +    AXI_RAM_ACCESS_QEMU_MEDIATED,
 +} AxiRamAccess;
 +
++typedef enum AxiNotifyPolicy {
++    AXI_NOTIFY_POLICY_ALL,
++    AXI_NOTIFY_POLICY_BARRIER,
++} AxiNotifyPolicy;
++
 +typedef enum AxiMsgKind {
 +    AXI_MSG_HELLO = 1,
 +    AXI_MSG_MEM_REGION = 2,
@@ -268,10 +273,12 @@ index 0000000000..14521bdf7f
 +    char *role;
 +    char *control_socket_path;
 +    char *ram_access;
++    char *notify_policy;
 +    char *target;
 +    AxiMode mode_value;
 +    AxiRole role_value;
 +    AxiRamAccess ram_access_mode;
++    AxiNotifyPolicy notify_policy_value;
 +    int sockfd;
 +    int listen_fd;
 +    int control_fd;
@@ -281,6 +288,7 @@ index 0000000000..14521bdf7f
 +    uint32_t notify_ack_seq;
 +    bool socket_error_reported;
 +    bool notify_ack;
++    bool async_notify_pending;
 +    qemu_irq irq;
 +};
 +
@@ -288,6 +296,47 @@ index 0000000000..14521bdf7f
 +static bool axi_io_all(int fd, void *buf, size_t len, bool is_write);
 +static void axi_control_close(AxiState *s);
 +static void axi_control_read(void *opaque);
++static void axi_wait_for_notify_ack(AxiState *s);
++
++static void axi_uio_notify_backend(AxiState *s)
++{
++    if (s->notify_ack) {
++        axi_wait_for_notify_ack(s);
++    } else {
++        axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
++        g_usleep(s->notify_delay_us);
++    }
++}
++
++static void axi_uio_notify_backend_async(AxiState *s)
++{
++    if (s->notify_ack && s->async_notify_pending) {
++        return;
++    }
++    axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
++    s->async_notify_pending = s->notify_ack;
++}
++
++static bool axi_uio_write_needs_backend(AxiState *s, hwaddr addr)
++{
++    if (s->notify_policy_value == AXI_NOTIFY_POLICY_ALL) {
++        return true;
++    }
++
++    switch (addr) {
++    case VIRTIO_MMIO_DEVICE_FEATURES_SEL:
++    case VIRTIO_MMIO_DRIVER_FEATURES:
++    case VIRTIO_MMIO_DRIVER_FEATURES_SEL:
++    case VIRTIO_MMIO_QUEUE_SEL:
++    case VIRTIO_MMIO_QUEUE_READY:
++    case VIRTIO_MMIO_INTERRUPT_ACK:
++    case VIRTIO_MMIO_QUEUE_NOTIFY:
++    case VIRTIO_MMIO_STATUS:
++        return true;
++    default:
++        return false;
++    }
++}
 +
 +static void axi_wait_for_notify_ack(AxiState *s)
 +{
@@ -427,6 +476,7 @@ index 0000000000..14521bdf7f
 +        }
 +        break;
 +    case AXI_MSG_FRONTEND_NOTIFY_ACK:
++        s->async_notify_pending = false;
 +        g_mutex_lock(&s->notify_lock);
 +        s->notify_ack_seq++;
 +        g_cond_broadcast(&s->notify_cond);
@@ -742,13 +792,9 @@ index 0000000000..14521bdf7f
 +    if (addr + size > s->size) {
 +        return 0;
 +    }
-+    if (s->role_value == AXI_ROLE_SLAVE) {
-+        if (s->notify_ack) {
-+            axi_wait_for_notify_ack(s);
-+        } else {
-+            axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
-+            g_usleep(s->notify_delay_us);
-+        }
++    if (s->role_value == AXI_ROLE_SLAVE &&
++        s->notify_policy_value == AXI_NOTIFY_POLICY_ALL) {
++        axi_uio_notify_backend(s);
 +    }
 +    memcpy(&value, s->shared_mmio + addr, size);
 +    return value;
@@ -781,12 +827,13 @@ index 0000000000..14521bdf7f
 +        }
 +    }
 +
-+    if (s->role_value == AXI_ROLE_SLAVE) {
-+        if (s->notify_ack) {
-+            axi_wait_for_notify_ack(s);
++    if (s->role_value == AXI_ROLE_SLAVE &&
++        axi_uio_write_needs_backend(s, addr)) {
++        if (s->notify_policy_value == AXI_NOTIFY_POLICY_BARRIER &&
++            addr == VIRTIO_MMIO_QUEUE_NOTIFY) {
++            axi_uio_notify_backend_async(s);
 +        } else {
-+            axi_control_send(s, AXI_MSG_FRONTEND_NOTIFY);
-+            g_usleep(s->notify_delay_us);
++            axi_uio_notify_backend(s);
 +        }
 +    } else if (s->role_value == AXI_ROLE_MASTER &&
 +               addr == AXI_CONTROL_IRQ_OFFSET) {
@@ -856,6 +903,24 @@ index 0000000000..14521bdf7f
 +    }
 +
 +    error_setg(errp, "invalid ram-access '%s'", mode);
++    return false;
++}
++
++static bool axi_parse_notify_policy(AxiState *s, Error **errp)
++{
++    const char *policy = s->notify_policy ?: "all";
++
++    if (!g_strcmp0(policy, "all")) {
++        s->notify_policy_value = AXI_NOTIFY_POLICY_ALL;
++        return true;
++    }
++
++    if (!g_strcmp0(policy, "barrier")) {
++        s->notify_policy_value = AXI_NOTIFY_POLICY_BARRIER;
++        return true;
++    }
++
++    error_setg(errp, "invalid notify-policy '%s'", policy);
 +    return false;
 +}
 +
@@ -1010,6 +1075,10 @@ index 0000000000..14521bdf7f
 +        return;
 +    }
 +
++    if (!axi_parse_notify_policy(s, errp)) {
++        return;
++    }
++
 +    if (!axi_realize_x86(s, errp) &&
 +        !axi_realize_arm_virt(s, errp)) {
 +        error_setg(errp, "axi is only supported on x86 microvm and ARM virt machines");
@@ -1054,7 +1123,7 @@ index 0000000000..14521bdf7f
 +    }
 +
 +    warn_report("%s: mapped 0x%" PRIx64 " bytes at 0x%" PRIx64
-+                ", irq=%u, socket=%s, ram-access=%s, target=%s; "
++                ", irq=%u, socket=%s, ram-access=%s, notify-policy=%s, target=%s; "
 +                "external forwarding protocol enabled",
 +                TYPE_AXI,
 +                s->size,
@@ -1062,6 +1131,7 @@ index 0000000000..14521bdf7f
 +                s->irq_num,
 +                s->socket_path,
 +                s->ram_access ?: "shared-mem",
++                s->notify_policy ?: "all",
 +                s->target ?: "");
 +}
 +
@@ -1078,6 +1148,7 @@ index 0000000000..14521bdf7f
 +    DEFINE_PROP_STRING("role", AxiState, role),
 +    DEFINE_PROP_STRING("control-socket", AxiState, control_socket_path),
 +    DEFINE_PROP_STRING("ram-access", AxiState, ram_access),
++    DEFINE_PROP_STRING("notify-policy", AxiState, notify_policy),
 +    DEFINE_PROP_STRING("target", AxiState, target),
 +    DEFINE_PROP_LINK("memdev", AxiState, hostmem, TYPE_MEMORY_BACKEND,
 +                     HostMemoryBackend *),
