@@ -12,4 +12,4 @@ fi
 mkdir -p "$root_dir/run"
 cmake -S "$root_dir" -B "$build_dir" -G Ninja -DCHIPLETS_FETCH_QEMU=OFF
 cmake --build "$build_dir" --target c-backend-tests --parallel
-exec "$root_dir/out/c-backend-tests" "$@"
+exec "$root_dir/build/out/c-backend-tests" "$@"

@@ -131,12 +131,12 @@ def build_backend_commands(workspace: Path, config: dict, qemu: dict) -> list[tu
             values["image"] = str(resolve(workspace, qemu_device["image"]))
             if "readonly" in qemu_device:
                 values["readonly"] = qemu_device["readonly"]
-            commands.append(([str(resolve(workspace, "out/virtio-blkd")), key_value_arg(values)], log))
+            commands.append(([str(resolve(workspace, "build/out/virtio-blkd")), key_value_arg(values)], log))
         elif device_type == "virtio-console":
             values = dict(common)
             if "output" in qemu_device:
                 values["output"] = str(resolve(workspace, qemu_device["output"]))
-            commands.append(([str(resolve(workspace, "out/virtio-consoled")), key_value_arg(values)], log))
+            commands.append(([str(resolve(workspace, "build/out/virtio-consoled")), key_value_arg(values)], log))
         else:
             raise ValueError(f'unsupported device type for {name}: {device_type}')
     return commands
@@ -156,7 +156,7 @@ def build_qemu_args(workspace: Path, config: dict, kernel: str, initrd: str, ext
     memory = parameters.get("memory", "512M")
     pcie = "on" if parameters.get("pcie", False) else "off"
     ram_access = config.get("ram_access", "shared-mem")
-    qemu_bin = resolve(workspace, qemu.get("binary", "out/qemu-x64-minimal/bin/qemu-system-x86_64"))
+    qemu_bin = resolve(workspace, qemu.get("binary", "build/out/qemu-x64-minimal/bin/qemu-system-x86_64"))
     data_dir = qemu_data_dir(qemu_bin)
     kernel_path = resolve(workspace, kernel)
     initrd_path = resolve(workspace, initrd)

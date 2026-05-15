@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-bench_size_mb=${BENCH_SIZE_MB:-1}
+bench_size_mb=${BENCH_SIZE_MB:-64}
 bs=${BENCH_BS:-64K}
 repeat=${BENCH_REPEAT:-1}
-guest_timeout=${BENCH_GUEST_TIMEOUT:-300}
+guest_timeout=${BENCH_GUEST_TIMEOUT:-90}
 tmp_root=${AXI_TEST_TMPDIR:-${TMPDIR:-/tmp}}
 if [ ! -d "$tmp_root" ] || [ ! -w "$tmp_root" ]; then
   tmp_root=/tmp

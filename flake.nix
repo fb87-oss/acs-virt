@@ -30,6 +30,10 @@
       pkgs.perl
       pkgs.bash
       pkgs.coreutils
+      pkgs.gnused
+      pkgs.gawk
+      pkgs.findutils
+      pkgs.gnugrep
     ];
 
     build-initrc = modules: pkgs.writeScript "make-initrc" ''
@@ -116,7 +120,7 @@
         exit 2
       fi
 
-      if [ ! -x "$PWD/out/virtio-blkd" ] || [ ! -x "$PWD/out/virtio-consoled" ]; then
+      if [ ! -x "$PWD/build/out/virtio-blkd" ] || [ ! -x "$PWD/build/out/virtio-consoled" ]; then
         "$PWD/scripts/build-tools.sh"
       fi
 
@@ -155,7 +159,7 @@ obj-m += chiplets_uio.o
 obj-m += axi_mmio.o
 EOF
       PATH=${uioModuleBuildPath}:$PATH \
-        ${pkgs.gnumake}/bin/make -s -C ${x64Kernel.dev}/lib/modules/${x64Kernel.modDirVersion}/build M="$module_build" modules
+        ${pkgs.gnumake}/bin/make -s -C ${x64Kernel.dev}/lib/modules/${x64Kernel.modDirVersion}/build ARCH=x86 M="$module_build" modules
       module_dst="lib/modules/${x64Kernel.modDirVersion}/kernel/drivers/uio/chiplets_uio.ko"
       ${pkgs.coreutils}/bin/mkdir -p "$tmp/$(${pkgs.coreutils}/bin/dirname "$module_dst")"
       ${pkgs.coreutils}/bin/cp "$module_build/chiplets_uio.ko" "$tmp/$module_dst"
@@ -166,9 +170,9 @@ EOF
       printf '%s\n' "$module_dst" >> "$tmp/modules.txt"
 
       ${pkgs.coreutils}/bin/mkdir -p "$tmp/bin"
-      ${pkgs.coreutils}/bin/cp "$PWD/out/virtio-blkd" "$tmp/bin/virtio-blkd"
-      ${pkgs.coreutils}/bin/cp "$PWD/out/virtio-consoled" "$tmp/bin/virtio-consoled"
-      ${pkgs.coreutils}/bin/cp "$PWD/out/uio-membench" "$tmp/bin/uio-membench"
+      ${pkgs.coreutils}/bin/cp "$PWD/build/out/virtio-blkd" "$tmp/bin/virtio-blkd"
+      ${pkgs.coreutils}/bin/cp "$PWD/build/out/virtio-consoled" "$tmp/bin/virtio-consoled"
+      ${pkgs.coreutils}/bin/cp "$PWD/build/out/uio-membench" "$tmp/bin/uio-membench"
 
       copy_deps() {
         local bin=$1
@@ -183,9 +187,9 @@ EOF
           done
         done
       }
-      copy_deps "$PWD/out/virtio-blkd"
-      copy_deps "$PWD/out/virtio-consoled"
-      copy_deps "$PWD/out/uio-membench"
+      copy_deps "$PWD/build/out/virtio-blkd"
+      copy_deps "$PWD/build/out/virtio-consoled"
+      copy_deps "$PWD/build/out/uio-membench"
 
       initrd="$tmp/uio-initrd.gz"
       (cd "$tmp" && ${pkgs.findutils}/bin/find . -print0 |

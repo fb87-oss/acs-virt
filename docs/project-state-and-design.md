@@ -620,7 +620,7 @@ Important defaults in `scripts/chiplets-launcher.py`:
 
 - `ram_access`: `shared-mem`
 - QEMU target type: `microvm`
-- QEMU binary: `out/qemu-x64-minimal/bin/qemu-system-x86_64`
+- QEMU binary: `build/out/qemu-x64-minimal/bin/qemu-system-x86_64`
 - memory: `512M`
 - KVM: enabled by default
 - PCIe: disabled by default

@@ -78,7 +78,7 @@ Guidelines:
 ```toml
 [targets.qemu]
 type = "microvm"
-binary = "out/qemu-x64-minimal/bin/qemu-system-x86_64"
+binary = "build/out/qemu-x64-minimal/bin/qemu-system-x86_64"
 parameters = { memory = "512M", kvm = true, pcie = false }
 ```
 
@@ -87,7 +87,7 @@ Fields:
 - `type`: optional QEMU machine target. Defaults to `microvm`; use `virt` for
   AArch64 samples.
 - `binary`: optional QEMU executable. Defaults to
-  `out/qemu-x64-minimal/bin/qemu-system-x86_64`. Relative paths are resolved
+   `build/out/qemu-x64-minimal/bin/qemu-system-x86_64`. Relative paths are resolved
   against the workspace and passed to QEMU as absolute paths.
 - `parameters`: optional machine parameter table.
 - `parameters.memory`: guest RAM size passed to both `-object` and `-m`; defaults
@@ -110,7 +110,7 @@ QEMU data files:
 
 - Do not configure `bios_dir` in runtime TOML.
 - For project-built QEMU, the build copies `pc-bios` into
-  `out/<qemu-target>/share/qemu`.
+   `build/out/<qemu-target>/share/qemu`.
 - The launcher derives the QEMU data dir from `binary` and passes it with `-L`.
 - For external QEMU binaries without a sibling `../share/qemu`, the launcher
   omits `-L` and lets QEMU use its compiled-in data dir.
@@ -174,8 +174,8 @@ The launcher starts backend daemons with one comma-separated `key=value` argumen
 Examples from the sample config:
 
 ```text
-out/virtio-blkd name=blk0,socket=/.../run/axi.sock,ram_access=qemu-mediated,image=/.../run/blk0.img,readonly=false
-out/virtio-consoled name=con0,socket=/.../run/axi-console.sock,ram_access=qemu-mediated,output=/.../run/cond.out
+build/out/virtio-blkd name=blk0,socket=/.../run/axi.sock,ram_access=qemu-mediated,image=/.../run/blk0.img,readonly=false
+build/out/virtio-consoled name=con0,socket=/.../run/axi-console.sock,ram_access=qemu-mediated,output=/.../run/cond.out
 ```
 
 Use `--no-backend` to launch only QEMU and manage backend daemons manually.

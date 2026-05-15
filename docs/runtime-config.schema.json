@@ -77,7 +77,7 @@
         },
         "binary": {
           "$ref": "#/$defs/path",
-          "default": "out/qemu-x64-minimal/bin/qemu-system-x86_64"
+          "default": "build/out/qemu-x64-minimal/bin/qemu-system-x86_64"
         },
         "parameters": {
           "type": "object",

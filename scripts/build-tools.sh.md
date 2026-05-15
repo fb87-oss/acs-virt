@@ -2,9 +2,9 @@
 
 Configures the CMake build and builds the local C tools:
 
-- `out/virtio-blkd`
-- `out/virtio-consoled`
-- `out/c-backend-tests`
+- `build/out/virtio-blkd`
+- `build/out/virtio-consoled`
+- `build/out/c-backend-tests`
 
 The script enters a Nix shell with CMake, GCC, and Git when needed. QEMU source
 fetching is disabled for this target set so normal backend builds stay fast.

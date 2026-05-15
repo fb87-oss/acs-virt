@@ -70,6 +70,7 @@ backends own virtio-mmio register models, virtqueue processing, and endpoint I/O
 ```text
 CMakeLists.txt                                C tools/tests and QEMU fetch target
 flake.nix                                      Nix run wrapper and initrd setup
+scripts/with-nix.sh                           podman-based Nix wrapper for systems without Nix
 scripts/build-tools.sh                        CMake build for local C tools/tests
 scripts/build-qemu-x64.sh                     CMake-backed minimal QEMU build script
 scripts/build-qemu-arm64.sh                   CMake-backed AArch64 QEMU build script
@@ -94,6 +95,47 @@ docs/axi-protocol.md                      QEMU/backend socket protocol
 patches/qemu/*.patch                          QEMU source changes
 ```
 
+## Build Without Nix
+
+On systems without a Nix installation, all build and run commands work through
+the `scripts/with-nix.sh` wrapper, which runs Nix inside a container:
+
+```sh
+# Build C tools
+scripts/with-nix.sh scripts/build-tools.sh
+
+# Build QEMU
+scripts/with-nix.sh scripts/build-qemu.sh x64
+
+# Run tests
+scripts/with-nix.sh tests/run-c-unit-tests.sh
+
+# Run a VM (requires QEMU built first)
+scripts/with-nix.sh nix run .#runvm-x64 -- samples/axi-x64.toml
+```
+
+The wrapper auto-detects `docker` or `podman` (prefers docker), mounts the
+workspace into a `nixos/nix:latest` container with a persistent volume for the
+Nix store (`/nix`), and passes through `/dev/kvm` when available for QEMU
+hardware acceleration. Set `NIX_CACHE_VOLUME` or `NIX_IMAGE` to customize.
+
+### Environment Variables
+
+Project-specific environment variables (`CHIPLETS_*`, `BENCH_*`, `UIO_*`,
+`AXI_TEST_TMPDIR`, `CMAKE_BUILD_DIR`, `BUILD_DIR`) are forwarded to the
+container automatically when set on the host:
+
+```sh
+BENCH_SIZE_MB=32 BENCH_REPEAT=3 scripts/with-nix.sh ./tests/run-benchmark.sh
+```
+
+Arbitrary variables can be passed explicitly:
+
+```sh
+scripts/with-nix.sh -e MY_VAR scripts/...          # from host environment
+scripts/with-nix.sh --env=MY_VAR=value scripts/...  # inline value
+```
+
 ## Build QEMU
 
 Build the minimal x86_64 QEMU binary:
@@ -113,14 +155,14 @@ The script:
 - configures QEMU with `--without-default-features` and
   `--without-default-devices`
 - builds `x86_64-softmmu`
-- installs `out/qemu-x64-minimal/bin/qemu-system-x86_64`
-- copies QEMU runtime BIOS/data files into `out/qemu-x64-minimal/share/qemu`
+- installs `build/out/qemu-x64-minimal/bin/qemu-system-x86_64`
+- copies QEMU runtime BIOS/data files into `build/out/qemu-x64-minimal/share/qemu`
 
 The launcher derives QEMU's data directory from the configured `binary` path and
 passes it with `-L` when `../share/qemu` exists:
 
 ```text
-out/qemu-x64-minimal/share/qemu
+build/out/qemu-x64-minimal/share/qemu
 ```
 
 ## Check QEMU Patches
@@ -148,9 +190,9 @@ scripts/build-tools.sh
 The output binaries are:
 
 ```text
-out/virtio-blkd
-out/virtio-consoled
-out/c-backend-tests
+build/out/virtio-blkd
+build/out/virtio-consoled
+build/out/c-backend-tests
 ```
 
 The backend drivers build against a stable `fabric.h` API. Select the fabric
@@ -176,7 +218,7 @@ CHIPLETS_BACKEND_FABRIC=linux-devmem \
 CHIPLETS_DEVMEM_MMIO_BASE=0xfeb00000 \
 scripts/build-tools.sh
 
-out/virtio-blkd 'name=blk0,socket=devmem:0xfeb00000,image=run/blk0.img,ram_access=devmem'
+build/out/virtio-blkd 'name=blk0,socket=devmem:0xfeb00000,image=run/blk0.img,ram_access=devmem'
 ```
 
 Optional devmem variables include `CHIPLETS_DEVMEM_PATH`,
@@ -200,7 +242,7 @@ the runtime image and start a backend with comma-separated arguments:
 mkdir -p run
 truncate -s 64M run/blk0.img
 scripts/build-tools.sh
-out/virtio-blkd name=blk0,socket=run/axi.sock,image=run/blk0.img,readonly=false,ram_access=qemu-mediated
+build/out/virtio-blkd name=blk0,socket=run/axi.sock,image=run/blk0.img,readonly=false,ram_access=qemu-mediated
 ```
 
 The backend listens on:
@@ -374,7 +416,6 @@ The following paths are generated and should not be treated as source:
 
 ```text
 build/
-out/
 run/
 .cache/
 ```

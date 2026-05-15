@@ -21,7 +21,7 @@ includes the target file selected by `CHIPLETS_QEMU_TARGET_FILE` when
 Each QEMU target file must define:
 
 - `CHIPLETS_QEMU_NAME`: CMake ExternalProject target name.
-- `CHIPLETS_QEMU_INSTALL_NAME`: install directory name under `out/`.
+- `CHIPLETS_QEMU_INSTALL_NAME`: install directory name under `build/out/`.
 - `CHIPLETS_QEMU_SOURCE_COPY_NAME`: patched source copy directory name under
   `build/`.
 - `CHIPLETS_QEMU_BUILD_NAME`: QEMU build directory name under `build/`.

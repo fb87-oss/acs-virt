@@ -23,7 +23,7 @@ FRONTEND_ADDR_OFFSET = 0x0020_0000_0000
 ARCH_CONFIGS = {
     "x64": {
         "description": "x86_64",
-        "qemu": "out/qemu-x64-minimal/bin/qemu-system-x86_64",
+        "qemu": "build/out/qemu-x64-minimal/bin/qemu-system-x86_64",
         "machine": "microvm,pcie=off,ioapic2=on,virtio-mmio-transports=0,memory-backend=guestmem",
         "append": "console=ttyS0 root=/dev/ram0 rdinit=/linuxrc loglevel=8",
         "cpu_args": [],
@@ -37,7 +37,7 @@ ARCH_CONFIGS = {
     },
     "a64": {
         "description": "ARM64",
-        "qemu": "out/qemu-arm64-default/bin/qemu-system-aarch64",
+        "qemu": "build/out/qemu-arm64-default/bin/qemu-system-aarch64",
         "machine": "virt,highmem-mmio=on,highmem-mmio-size=1T,gic-version=3,acpi=off,memory-backend=guestmem",
         "append": "console=ttyAMA0 root=/dev/ram0 rdinit=/linuxrc loglevel=8",
         "cpu_args": ["-cpu", "max"],

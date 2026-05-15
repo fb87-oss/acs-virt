@@ -12,7 +12,7 @@ mmio = { base = "0xfeb00200", size = "0x200", irq = 49 }
 
 [targets.qemu]
 type = "virt"
-binary = "out/qemu-arm64-default/bin/qemu-system-aarch64"
+binary = "build/out/qemu-arm64-default/bin/qemu-system-aarch64"
 parameters = { memory = "512M", kvm = false, pcie = false, cpu = "max" }
 
 [[targets.qemu.devices]]
