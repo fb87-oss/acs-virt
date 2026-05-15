@@ -34,7 +34,7 @@ throughput in this repository.
    - `tests/run-benchmark.sh`: benchmark entry point.
    - `tests/run-benchmark.md`: benchmark behavior and output format.
    - `scripts/chiplets-uio-x64.py`: two-VM UIO launcher.
-   - `scripts/build-qemu-x64.sh`: rebuilds patched x86_64 QEMU.
+    - `scripts/build-qemu.sh`: rebuilds patched QEMU (x86_64 + AArch64).
    - `src/`: backend daemons, virtio helpers, and backend fabrics.
    - `patches/qemu/`: QEMU `axi` device and platform integration patches.
 
@@ -131,7 +131,7 @@ If only `src/` changed, `tests/run-benchmark.sh` rebuilds the backend daemons vi
 If `patches/qemu/` changed, rebuild x86_64 QEMU before benchmarking:
 
 ```sh
-scripts/build-qemu-x64.sh
+scripts/build-qemu.sh
 ```
 
 Then run the benchmark.
@@ -208,7 +208,7 @@ Loop until manually stopped:
 4. Rebuild QEMU if a QEMU patch changed.
 
    ```sh
-   scripts/build-qemu-x64.sh
+   scripts/build-qemu.sh
    ```
 
 5. Commit the experiment.

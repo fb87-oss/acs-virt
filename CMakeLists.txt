@@ -16,8 +16,7 @@ endif()
 option(CHIPLETS_FETCH_QEMU "Fetch QEMU source and enable the configured QEMU target" OFF)
 set(CHIPLETS_BACKEND_FABRIC "qemu-socket" CACHE STRING "Backend fabric implementation: qemu-socket, linux-devmem, or linux-uio")
 set_property(CACHE CHIPLETS_BACKEND_FABRIC PROPERTY STRINGS qemu-socket linux-devmem linux-uio axi devmem uio)
-set(CHIPLETS_QEMU_TARGET_FILE "${CMAKE_SOURCE_DIR}/cmake/qemu-targets/x64-minimal.cmake"
-    CACHE FILEPATH "QEMU target configuration file")
+
 
 if(CHIPLETS_BACKEND_FABRIC STREQUAL "qemu-socket" OR CHIPLETS_BACKEND_FABRIC STREQUAL "axi")
   set(CHIPLETS_BACKEND_FABRIC_SOURCE src/fabrics/qemu_socket.c)
@@ -97,22 +96,8 @@ add_test(NAME c-backend-tests COMMAND c-backend-tests)
 install(TARGETS virtio-blkd virtio-consoled uio-membench c-backend-tests RUNTIME DESTINATION bin)
 
 if(CHIPLETS_FETCH_QEMU)
-  include(${CHIPLETS_QEMU_TARGET_FILE})
-
-  foreach(required_var
-      CHIPLETS_QEMU_NAME
-      CHIPLETS_QEMU_INSTALL_NAME
-      CHIPLETS_QEMU_SOURCE_COPY_NAME
-      CHIPLETS_QEMU_BUILD_NAME
-      CHIPLETS_QEMU_SOFTMMU_TARGET
-      CHIPLETS_QEMU_DEVICE_CONFIG_TARGET
-      CHIPLETS_QEMU_SYSTEM_BINARY)
-    if(NOT DEFINED ${required_var})
-      message(FATAL_ERROR "${CHIPLETS_QEMU_TARGET_FILE} must define ${required_var}")
-    endif()
-  endforeach()
-
   set(QEMU_SOURCE_DIR ${CMAKE_SOURCE_DIR}/build/external/qemu-src)
+
   ExternalProject_Add(
     qemu-source
     URL https://download.qemu.org/qemu-10.2.2.tar.xz
@@ -123,14 +108,14 @@ if(CHIPLETS_FETCH_QEMU)
     INSTALL_COMMAND ""
   )
 
-  set(QEMU_PATCHED_SRC ${CMAKE_SOURCE_DIR}/build/${CHIPLETS_QEMU_SOURCE_COPY_NAME})
-  set(QEMU_BUILD_DIR ${CMAKE_SOURCE_DIR}/build/${CHIPLETS_QEMU_BUILD_NAME})
-  set(QEMU_INSTALL_DIR ${CMAKE_SOURCE_DIR}/build/out/${CHIPLETS_QEMU_INSTALL_NAME})
+  set(QEMU_PATCHED_SRC ${CMAKE_SOURCE_DIR}/build/qemu-src)
+  set(QEMU_BUILD_DIR ${CMAKE_SOURCE_DIR}/build/qemu)
+  set(QEMU_INSTALL_DIR ${CMAKE_SOURCE_DIR}/build/out/qemu)
 
   file(GLOB QEMU_PATCHES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/patches/qemu/*.patch)
 
   ExternalProject_Add(
-    ${CHIPLETS_QEMU_NAME}
+    qemu
     DEPENDS qemu-source
     SOURCE_DIR ${QEMU_PATCHED_SRC}
     BINARY_DIR ${QEMU_BUILD_DIR}
@@ -150,8 +135,9 @@ if(CHIPLETS_FETCH_QEMU)
               CXX=ccache\ g++
               ${QEMU_PATCHED_SRC}/configure
               --prefix=${QEMU_INSTALL_DIR}
-              --target-list=${CHIPLETS_QEMU_SOFTMMU_TARGET}
-              $<$<BOOL:${CHIPLETS_QEMU_DEVICE_CONFIG}>:--with-devices-${CHIPLETS_QEMU_DEVICE_CONFIG_TARGET}=${CHIPLETS_QEMU_DEVICE_CONFIG}>
+              --target-list=x86_64-softmmu,aarch64-softmmu
+              --with-devices-x86_64=microvm-minimal
+              --with-devices-aarch64=virt-minimal
               --without-default-features
               --without-default-devices
               --enable-fdt=internal
@@ -175,14 +161,19 @@ if(CHIPLETS_FETCH_QEMU)
               --enable-strip
               --enable-trace-backends=nop
               --audio-drv-list=
-    BUILD_COMMAND ninja ${CHIPLETS_QEMU_SYSTEM_BINARY}
+    BUILD_COMMAND ninja qemu-system-x86_64 qemu-system-aarch64
     INSTALL_COMMAND
       ${CMAKE_COMMAND} -E make_directory ${QEMU_INSTALL_DIR}/bin ${QEMU_INSTALL_DIR}/share/qemu
-      COMMAND ${CMAKE_COMMAND} -E copy ${QEMU_BUILD_DIR}/${CHIPLETS_QEMU_SYSTEM_BINARY} ${QEMU_INSTALL_DIR}/bin/${CHIPLETS_QEMU_SYSTEM_BINARY}
+      COMMAND ${CMAKE_COMMAND} -E copy ${QEMU_BUILD_DIR}/qemu-system-x86_64 ${QEMU_INSTALL_DIR}/bin/qemu-system-x86_64
+      COMMAND strip -s ${QEMU_INSTALL_DIR}/bin/qemu-system-x86_64
+      COMMAND ${CMAKE_COMMAND} -E copy ${QEMU_BUILD_DIR}/qemu-system-aarch64 ${QEMU_INSTALL_DIR}/bin/qemu-system-aarch64
+      COMMAND strip -s ${QEMU_INSTALL_DIR}/bin/qemu-system-aarch64
       COMMAND ${CMAKE_COMMAND} -E copy_directory ${QEMU_SOURCE_DIR}/pc-bios ${QEMU_INSTALL_DIR}/share/qemu
-      COMMAND strip -s ${QEMU_INSTALL_DIR}/bin/${CHIPLETS_QEMU_SYSTEM_BINARY}
-    BUILD_BYPRODUCTS ${QEMU_INSTALL_DIR}/bin/${CHIPLETS_QEMU_SYSTEM_BINARY}
+    BUILD_BYPRODUCTS
+      ${QEMU_INSTALL_DIR}/bin/qemu-system-x86_64
+      ${QEMU_INSTALL_DIR}/bin/qemu-system-aarch64
   )
 
-  ExternalProject_Add_StepDependencies(${CHIPLETS_QEMU_NAME} patch ${QEMU_PATCHES})
+  ExternalProject_Add_StepDependencies(qemu patch ${QEMU_PATCHES})
 endif()
+

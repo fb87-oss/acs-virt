@@ -34,7 +34,7 @@ def resolve(workspace: Path, value: str) -> Path:
 
 def qemu_data_dir(qemu_bin: Path) -> Path | None:
     data_dir = qemu_bin.parent.parent / "share" / "qemu"
-    if data_dir.is_dir() or qemu_bin.parent.parent.name == "qemu-x64-minimal":
+    if data_dir.is_dir() or qemu_bin.parent.parent.name == "qemu":
         return data_dir
     return None
 
@@ -156,7 +156,7 @@ def build_qemu_args(workspace: Path, config: dict, kernel: str, initrd: str, ext
     memory = parameters.get("memory", "512M")
     pcie = "on" if parameters.get("pcie", False) else "off"
     ram_access = config.get("ram_access", "shared-mem")
-    qemu_bin = resolve(workspace, qemu.get("binary", "build/out/qemu-x64-minimal/bin/qemu-system-x86_64"))
+    qemu_bin = resolve(workspace, qemu.get("binary", "build/out/qemu/bin/qemu-system-x86_64"))
     data_dir = qemu_data_dir(qemu_bin)
     kernel_path = resolve(workspace, kernel)
     initrd_path = resolve(workspace, initrd)

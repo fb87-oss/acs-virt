@@ -72,8 +72,7 @@ CMakeLists.txt                                C tools/tests and QEMU fetch targe
 flake.nix                                      Nix run wrapper and initrd setup
 scripts/with-nix.sh                           podman-based Nix wrapper for systems without Nix
 scripts/build-tools.sh                        CMake build for local C tools/tests
-scripts/build-qemu-x64.sh                     CMake-backed minimal QEMU build script
-scripts/build-qemu-arm64.sh                   CMake-backed AArch64 QEMU build script
+scripts/build-qemu.sh                         Combined x86_64 + AArch64 QEMU build script
 scripts/chiplets-launcher.py                  TOML orchestrator and QEMU launcher
 tests/run-tests.sh                            end-to-end smoke test
 tests/run-benchmark.sh                        dd throughput benchmark
@@ -105,7 +104,7 @@ the `scripts/with-nix.sh` wrapper, which runs Nix inside a container:
 scripts/with-nix.sh scripts/build-tools.sh
 
 # Build QEMU
-scripts/with-nix.sh scripts/build-qemu.sh x64
+scripts/with-nix.sh scripts/build-qemu.sh
 
 # Run tests
 scripts/with-nix.sh tests/run-c-unit-tests.sh
@@ -138,31 +137,30 @@ scripts/with-nix.sh --env=MY_VAR=value scripts/...  # inline value
 
 ## Build QEMU
 
-Build the minimal x86_64 QEMU binary:
+Build both x86_64 and AArch64 QEMU binaries in a single pass:
 
 ```sh
-scripts/build-qemu-x64.sh
+scripts/build-qemu.sh
 ```
 
 The script:
 
 - re-enters a Nix shell with the required CMake and QEMU build tools
 - uses CMake `ExternalProject` to fetch the QEMU release tarball
-- selects the QEMU target file `cmake/qemu-targets/x64-minimal.cmake`
-- copies the fetched QEMU source to `build/qemu-src-x64-minimal`
 - applies `patches/qemu/*.patch`
 - uses `ccache`
-- configures QEMU with `--without-default-features` and
-  `--without-default-devices`
-- builds `x86_64-softmmu`
-- installs `build/out/qemu-x64-minimal/bin/qemu-system-x86_64`
-- copies QEMU runtime BIOS/data files into `build/out/qemu-x64-minimal/share/qemu`
+- configures QEMU with `--target-list=x86_64-softmmu,aarch64-softmmu`,
+  `--without-default-features`, and `--without-default-devices`
+- builds both `qemu-system-x86_64` and `qemu-system-aarch64` from the same
+  patched source tree
+- installs both binaries to `build/out/qemu/bin/`
+- copies QEMU runtime BIOS/data files into `build/out/qemu/share/qemu`
 
 The launcher derives QEMU's data directory from the configured `binary` path and
 passes it with `-L` when `../share/qemu` exists:
 
 ```text
-build/out/qemu-x64-minimal/share/qemu
+build/out/qemu/share/qemu
 ```
 
 ## Check QEMU Patches
@@ -170,7 +168,7 @@ build/out/qemu-x64-minimal/share/qemu
 Before or after editing QEMU patches, verify through the CMake-backed QEMU build:
 
 ```sh
-scripts/build-qemu-x64.sh
+scripts/build-qemu.sh
 ```
 
 Patch docs live beside the patches:
@@ -395,7 +393,7 @@ scripts/build-tools.sh
 If QEMU patches changed, rebuild QEMU:
 
 ```sh
-scripts/build-qemu-x64.sh
+scripts/build-qemu.sh
 ```
 
 Then run:

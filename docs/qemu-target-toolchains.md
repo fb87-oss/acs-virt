@@ -1,89 +1,33 @@
-# QEMU Target Toolchains
+# QEMU Build Configuration
 
-QEMU build target selection lives in small CMake files under:
+The QEMU build is configured directly in `CMakeLists.txt` under the
+`if(CHIPLETS_FETCH_QEMU)` block. It builds both `x86_64-softmmu` and
+`aarch64-softmmu` in a single CMake ExternalProject.
 
-```text
-cmake/qemu-targets/
-```
-
-The default target file is:
-
-```text
-cmake/qemu-targets/x64-minimal.cmake
-```
-
-`CMakeLists.txt` fetches the QEMU release tarball with `ExternalProject` and
-includes the target file selected by `CHIPLETS_QEMU_TARGET_FILE` when
-`CHIPLETS_FETCH_QEMU=ON`.
-
-## Required Variables
-
-Each QEMU target file must define:
-
-- `CHIPLETS_QEMU_NAME`: CMake ExternalProject target name.
-- `CHIPLETS_QEMU_INSTALL_NAME`: install directory name under `build/out/`.
-- `CHIPLETS_QEMU_SOURCE_COPY_NAME`: patched source copy directory name under
-  `build/`.
-- `CHIPLETS_QEMU_BUILD_NAME`: QEMU build directory name under `build/`.
-- `CHIPLETS_QEMU_SOFTMMU_TARGET`: QEMU `--target-list` value.
-- `CHIPLETS_QEMU_DEVICE_CONFIG_TARGET`: suffix used by QEMU's
-  `--with-devices-<target>=...` configure option.
-- `CHIPLETS_QEMU_DEVICE_CONFIG`: optional QEMU device allowlist config name. Set
-  it to an empty string to let QEMU use the target's allnoconfig baseline.
-- `CHIPLETS_QEMU_SYSTEM_BINARY`: built QEMU system binary name.
-
-## Current x86_64 Target
-
-```cmake
-set(CHIPLETS_QEMU_NAME qemu-x64-minimal)
-set(CHIPLETS_QEMU_INSTALL_NAME qemu-x64-minimal)
-set(CHIPLETS_QEMU_SOURCE_COPY_NAME qemu-src-x64-minimal)
-set(CHIPLETS_QEMU_BUILD_NAME qemu-x64-minimal)
-
-set(CHIPLETS_QEMU_SOFTMMU_TARGET x86_64-softmmu)
-set(CHIPLETS_QEMU_DEVICE_CONFIG_TARGET x86_64)
-set(CHIPLETS_QEMU_DEVICE_CONFIG microvm-minimal)
-set(CHIPLETS_QEMU_SYSTEM_BINARY qemu-system-x86_64)
-```
-
-Build it with:
+Build it:
 
 ```sh
-scripts/build-qemu-x64.sh
+scripts/build-qemu.sh
 ```
 
-## Adding Another Target
+## Configure Flags
 
-For AArch64, the repository provides:
+The QEMU configure invocation uses:
 
-```text
-cmake/qemu-targets/arm64-default.cmake
+```
+--target-list=x86_64-softmmu,aarch64-softmmu
+--with-devices-x86_64=microvm-minimal
+--with-devices-aarch64=virt-minimal
 ```
 
-It builds `aarch64-softmmu` with the patched `virt-minimal` device allowlist:
+Both machine types share the same patched source tree and build directory.
 
-```cmake
-set(CHIPLETS_QEMU_NAME qemu-arm64-default)
-set(CHIPLETS_QEMU_SOFTMMU_TARGET aarch64-softmmu)
-set(CHIPLETS_QEMU_DEVICE_CONFIG_TARGET aarch64)
-set(CHIPLETS_QEMU_DEVICE_CONFIG virt-minimal)
-set(CHIPLETS_QEMU_SYSTEM_BINARY qemu-system-aarch64)
-```
+## Architecture-Specific Device Configs
 
-Build it with:
-
-```sh
-scripts/build-qemu-arm64.sh
-```
+- **x86_64** uses `microvm-minimal`: the microvm machine with only the `axi`
+  sysbus device enabled.
+- **AArch64** uses `virt-minimal`: the `virt` machine with only the `axi`
+  sysbus device enabled.
 
 The `axi` QEMU proxy supports x86 microvm ACPI discovery and AArch64 `virt`
-FDT discovery. The current launch sample remains x86 microvm-specific because it
-uses the x86 kernel/initrd and microvm machine parameters.
-
-Configure CMake with a custom target file using:
-
-```sh
-cmake -S . -B build/cmake-qemu-arm64 -G Ninja \
-  -DCHIPLETS_FETCH_QEMU=ON \
-  -DCHIPLETS_QEMU_TARGET_FILE="$PWD/cmake/qemu-targets/arm64-default.cmake"
-```
+FDT discovery.

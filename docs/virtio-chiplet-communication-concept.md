@@ -576,10 +576,10 @@ Consumer chiplet                                      Service chiplet
   +-------------------------+                                 +-----------+-------------+
                                                                       |
                                                                       v
-                                                            +-------------------------+
-                                                            | access only allowed     |
-                                                            | shared/CMA bytes        |
-                                                            +-------------------------+
+                                                              +-------------------------+
+                                                              | access only allowed     |
+                                                              | shared/CMA bytes        |
+                                                              +-------------------------+
 
 Invalid descriptor examples rejected by the service backend:
   descriptor below shared region
@@ -842,6 +842,105 @@ The PoC keeps the same logical split even though the physical interconnect is
 emulated by QEMU, host memory objects, sockets, and UIO devices.
 ```
 
+### How The QEMU Patch Enables This Concept
+
+The single QEMU patch in `patches/qemu/0001-chiplets-qemu-support.patch` makes the
+concept work by providing these specific mechanisms:
+
+#### Custom `axi` Sysbus Device
+
+The patch introduces a new `axi` sysbus device (`hw/misc/axi.c`) that acts as a
+pure transport proxy. The device is intentionally ignorant of VirtIO — it does not
+parse virtqueues, handle feature negotiation, or implement any endpoint protocol.
+Its sole job is to expose a configurable MMIO window in the guest physical address
+space and forward register accesses through either a Unix socket (socket mode) or a
+shared memory object plus control socket (UIO mode).
+
+This proxy design is essential to the concept because it lets external userspace
+daemons own the full VirtIO device model. The QEMU `axi` device provides the
+transport; backend daemons such as `virtio-blkd` provide the endpoint behavior.
+This separation matches the chiplet vision where the interconnect (AXI, ATU/UCIe)
+carries MMIO and memory transactions but does not interpret device-level protocols.
+
+#### Disabling Built-In VirtIO-MMIO Transports
+
+The patch adds the `virtio-mmio-transports` property to the `microvm` machine.
+Setting `virtio-mmio-transports=0` disables QEMU's built-in VirtIO-MMIO transport
+slots. This ensures that all VirtIO-MMIO windows in the frontend VM come from the
+custom `axi` device rather than from QEMU's internal virtio-mmio bus. The frontend
+VM therefore discovers exactly the same device topology that a real consumer chiplet
+would see: platform MMIO windows backed by an external service chiplet, not by local
+QEMU emulation.
+
+#### IRQ Reservation For External Backends
+
+The patch reserves primary IO-APIC GSIs 16 through 23 (8 interrupts) on `microvm`
+for project `axi` devices. These GSIs are not consumed by QEMU's own virtio-mmio
+transports — they are intentionally set aside so that `axi` device instances can
+inject interrupts that correspond to MSI-like completion signals from the service
+chiplet. In the hardware vision, the service chiplet raises MSI interrupts over
+the AXI interconnect; in the PoC, the backend QEMU sends a control-socket message,
+the frontend QEMU injects the GSI, and the frontend Linux kernel handles it as a
+normal interrupt from an `axi,mmio` device. The IRQ path is the same logical
+operation even though the physical mechanism differs.
+
+#### Firmware Discovery For Driver Binding
+
+The patch exposes frontend `axi` devices through the firmware tables that Linux
+uses for device discovery:
+
+- **x86_64 microvm**: ACPI `LNRO0005` entries with `_CRS` providing the MMIO base,
+  size, and GSI number. Linux's `virtio-mmio` ACPI driver matches these entries
+  without any project-specific kernel changes on the frontend side.
+- **AArch64 virt**: FDT nodes with compatible strings `virtio,mmio` for slave
+  (frontend) devices and `chiplets,uio` for master (backend) devices.
+
+This firmware exposure directly enables the concept's driver-stack layering. The
+frontend Linux kernel discovers the `axi` windows as standard VirtIO-MMIO devices
+and binds normal VirtIO frontend drivers (`virtio_blk`, `virtio_console`, etc.)
+without modification. The backend Linux kernel discovers UIO devices and binds
+`uio_pdrv_genirq`, giving userspace daemons access to the MMIO control window and
+shared-memory aperture through `/dev/uioX`.
+
+#### Two-VM UIO Transport With Shared Memory
+
+In UIO mode, the patch enables the concept's most important validation path:
+
+- **Two QEMU processes** represent the consumer and service chiplets.
+- **Shared host files** back the VirtIO-MMIO register windows (`blk.mmio`,
+  `con.mmio`) and the restricted shared-memory aperture (`frontend.cma`).
+- **Unix control sockets** carry notify events and interrupt assert/deassert
+  messages between the two QEMU instances.
+- **Payload DMA does not traverse the socket** — backend daemons map the shared
+  aperture directly through UIO `map1` and read or write descriptor rings and
+  payload buffers as plain memory.
+
+This UIO transport directly mirrors the hardware concept:
+
+| Concept requirement                | QEMU PoC implementation            |
+|------------------------------------|------------------------------------|
+| Consumer MMIO register access      | Frontend QEMU `axi` MMIO window    |
+| Service-side MMIO register view    | Backend QEMU `axi` MMIO window + UIO `map0` |
+| Restricted shared-memory aperture  | `frontend.cma` host file, exposed as `dma-memdev` on frontend, UIO `map1` on backend |
+| Queue notify / doorbell            | Frontend MMIO write → control socket → backend UIO `read(/dev/uioX)` event |
+| Completion interrupt / MSI         | Backend UIO IRQ → control socket → frontend QEMU GSI injection |
+| Address translation                | `dma-base` offset maps frontend physical addresses into the backend-visible aperture at `0x0010_0000_0000` |
+
+#### Socket Mode For Early Bring-Up
+
+The patch also supports a socket-only mode where all MMIO, DMA, and IRQ operations
+travel over a single Unix socket between the frontend QEMU and a host backend
+daemon. This mode uses fixed-header messages (`MMIO_READ`, `MMIO_WRITE`, `DMA_READ`,
+`DMA_WRITE`, `IRQ_ASSERT`, etc.) and does not require a second VM. It is useful for
+debugging the VirtIO device model before the two-VM shared-memory topology is
+needed, and it validates the same `fabric.h` backend abstraction that the UIO mode
+uses.
+
+In both modes, the patch keeps QEMU in its intended role: it emulates the transport
+and memory model, not the endpoint behavior. This division of labor is the same
+principle that lets the concept migrate from QEMU to real AXI + ATU/UCIe + MSI
+hardware without changing the software contract.
+
 ## Current PoC Devices
 
 The current repository demonstrates the framework with simple VirtIO devices:
@@ -947,8 +1046,7 @@ src/kernel/chiplets_uio.c                      Backend UIO helper driver for x64
 scripts/chiplets-launcher.py                   TOML-driven axi-socket launcher
 scripts/chiplets-uio-x64.py                    Two-VM UIO launcher and benchmark
 scripts/build-tools.sh                         C backend/tool build wrapper
-scripts/build-qemu-x64.sh                      x86_64 QEMU patch/build wrapper
-scripts/build-qemu-arm64.sh                    ARM64 QEMU patch/build wrapper
+scripts/build-qemu.sh                            Combined x86_64 + AArch64 QEMU build wrapper
 
 tests/run-tests.sh                             x64 UIO smoke test
 tests/run-tests-a64.sh                         ARM64 UIO smoke test

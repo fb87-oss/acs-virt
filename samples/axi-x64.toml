@@ -12,7 +12,7 @@ mmio = { base = "0xfeb00200", size = "0x200", irq = 17 }
 
 [targets.qemu]
 type = "microvm"
-binary = "build/out/qemu-x64-minimal/bin/qemu-system-x86_64"
+binary = "build/out/qemu/bin/qemu-system-x86_64"
 parameters = { memory = "512M", kvm = true, pcie = false }
 
 [[targets.qemu.devices]]

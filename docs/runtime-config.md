@@ -78,7 +78,7 @@ Guidelines:
 ```toml
 [targets.qemu]
 type = "microvm"
-binary = "build/out/qemu-x64-minimal/bin/qemu-system-x86_64"
+binary = "build/out/qemu/bin/qemu-system-x86_64"
 parameters = { memory = "512M", kvm = true, pcie = false }
 ```
 
@@ -87,7 +87,7 @@ Fields:
 - `type`: optional QEMU machine target. Defaults to `microvm`; use `virt` for
   AArch64 samples.
 - `binary`: optional QEMU executable. Defaults to
-   `build/out/qemu-x64-minimal/bin/qemu-system-x86_64`. Relative paths are resolved
+   `build/out/qemu/bin/qemu-system-x86_64`. Relative paths are resolved
   against the workspace and passed to QEMU as absolute paths.
 - `parameters`: optional machine parameter table.
 - `parameters.memory`: guest RAM size passed to both `-object` and `-m`; defaults
